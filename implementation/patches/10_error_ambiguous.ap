@@ -1,0 +1,8 @@
+version: "1.0"
+changes:
+  - file_path: "10_error_src.py"
+    modifications:
+      - action: REPLACE
+        target:
+          snippet: "result = 1 + 1"
+        content: "result = 2"

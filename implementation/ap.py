@@ -1,0 +1,300 @@
+import yaml
+import os
+import argparse
+import difflib
+import json
+from typing import Optional, Tuple, List, Dict, Any
+
+def visualize_str(s: str) -> str:
+    """Makes special characters visible for debugging."""
+    if not isinstance(s, str): return repr(s)
+    return s.replace('\t', '\\t').replace('\r', '\\r').replace('\n', '\\n\n')
+
+def debug_print(debug_flag: bool, title: str, **kwargs):
+    """Prints a formatted debug message if the debug flag is set."""
+    if not debug_flag: return
+    print(f"\n--- DEBUG: {title} ---")
+    for key, value in kwargs.items():
+        if isinstance(value, str) and len(value) > 80:
+            print(f"  {key} (len={len(value)}):")
+            print(f"    Visualized: {visualize_str(value[:200])}... (truncated)")
+        else:
+            print(f"  {key}: {visualize_str(value)}")
+    print("--------------------" + "-" * len(title))
+
+def detect_line_endings(file_path: str) -> str:
+    """Detects the dominant line ending character in a file."""
+    try:
+        with open(file_path, 'rb') as f:
+            chunk = f.read(1024)
+            if b'\r\n' in chunk: return '\r\n'
+            if b'\n' in chunk: return '\n'
+            if b'\r' in chunk: return '\r'
+    except (IOError, FileNotFoundError): pass
+    return os.linesep
+
+def get_fuzzy_matches(content: str, snippet: str, cutoff: float = 0.7) -> List[Dict[str, Any]]:
+    """Finds lines in content that are similar to the first line of the snippet."""
+    matches = []
+    if not snippet.strip(): return []
+    snippet_first_line = snippet.strip().splitlines()[0]
+    for i, line in enumerate(content.splitlines()):
+        line = line.strip()
+        if not line: continue
+        ratio = difflib.SequenceMatcher(None, snippet_first_line, line).ratio()
+        if ratio >= cutoff:
+            matches.append({"line_number": i + 1, "score": round(ratio, 2), "text": line})
+    return sorted(matches, key=lambda x: x['score'], reverse=True)[:3]
+
+def smart_find(content: str, snippet: str) -> List[Tuple[int, int]]:
+    """Finds all occurrences of a snippet, ignoring indentation and blank lines."""
+    original_lines = content.splitlines(keepends=True)
+    snippet_lines = [line for line in snippet.strip().splitlines() if line.strip()]
+    normalized_snippet_lines = [line.strip() for line in snippet_lines]
+    if not snippet_lines: return []
+
+    occurrences = []
+    i = 0
+    while i < len(original_lines):
+        block_to_check_lines, line_indices = [], []
+        j = i
+        while len(block_to_check_lines) < len(snippet_lines) and j < len(original_lines):
+            line = original_lines[j]
+            if line.strip(): block_to_check_lines.append(line)
+            line_indices.append(j)
+            j += 1
+
+        if len(block_to_check_lines) < len(snippet_lines): break
+
+        if [line.strip() for line in block_to_check_lines] == normalized_snippet_lines:
+            start_pos = len("".join(original_lines[:line_indices[0]]))
+            end_pos = len("".join(original_lines[:line_indices[-1] + 1]))
+            occurrences.append((start_pos, end_pos))
+            i = line_indices[-1] + 1
+        else:
+            i += 1
+    return occurrences
+
+def find_target_in_content(
+    content: str, anchor: Optional[str], snippet: str, debug: bool = False
+) -> Tuple[Optional[Tuple[int, int]], Dict[str, Any]]:
+    search_space, offset, anchor_found = content, 0, None
+    if anchor:
+        debug_print(debug, "ANCHOR SEARCH", anchor=anchor)
+        try:
+            anchor_pos = content.index(anchor)
+            search_space, offset, anchor_found = content[anchor_pos:], anchor_pos, True
+            debug_print(debug, "ANCHOR FOUND", position=anchor_pos)
+        except ValueError:
+            debug_print(debug, "ANCHOR NOT FOUND")
+            return None, {
+                "code": "ANCHOR_NOT_FOUND",
+                "message": "Anchor not found.",
+                "context": {
+                    "anchor": anchor
+                }
+            }
+
+    debug_print(debug, "SNIPPET SEARCH", snippet=snippet, search_space_len=len(search_space))
+    occurrences = smart_find(search_space, snippet)
+
+    # Heuristic: If an anchor is used, we assume the first match is the correct one.
+    # This resolves ambiguities within a specific function or class.
+    if anchor and len(occurrences) > 1:
+        debug_print(
+            debug, "AMBIGUITY HEURISTIC",
+            message="Anchor present, taking first match.", all_occurrences=occurrences
+        )
+        occurrences = occurrences[:1]
+
+    debug_print(debug, "SNIPPET SEARCH RESULT", num_occurrences=len(occurrences), occurrences=occurrences)
+
+    if not occurrences:
+        context = {
+            "snippet": snippet,
+            "anchor": anchor,
+            "anchor_found": anchor_found,
+            "fuzzy_matches": get_fuzzy_matches(search_space, snippet)
+        }
+        return None, {
+            "code": "SNIPPET_NOT_FOUND",
+            "message": "Snippet not found.",
+            "context": context
+        }
+    if len(occurrences) > 1:
+        context = {
+            "snippet": snippet,
+            "anchor": anchor,
+            "anchor_found": anchor_found,
+            "count": len(occurrences)
+        }
+        return None, {
+            "code": "AMBIGUOUS_MATCH",
+            "message": f"Snippet found {len(occurrences)} times.",
+            "context": context
+        }
+
+    start_pos, end_pos = occurrences[0]
+    return (start_pos + offset, end_pos + offset), {}
+
+def apply_patch(
+    patch_file: str, project_dir: str, dry_run: bool = False,
+    json_report: bool = False, debug: bool = False
+) -> Dict[str, Any]:
+    def report_error(details):
+        if not json_report:
+            print(f"\nERROR: {details['error']['message']}")
+            ctx = details['error'].get('context', {})
+            if 'snippet' in ctx: print(f"---\nSnippet:\n{ctx['snippet']}\n---")
+            if ctx.get('fuzzy_matches'):
+                print("Did you mean one of these?")
+                for match in ctx['fuzzy_matches']: print(f"  Line {match['line_number']} (Score: {match['score']}): {match['text']}")
+        return details
+
+    try:
+        with open(patch_file, 'r', encoding='utf-8') as f: data = yaml.safe_load(f)
+    except Exception as e:
+        return report_error({
+            "status": "FAILED",
+            "error": {
+                "code": "INVALID_PATCH_FILE",
+                "message": str(e)
+            }
+        })
+
+    for change in data.get('changes', []):
+        file_path = os.path.join(project_dir, change['file_path'])
+        newline_mode = change.get('newline')
+        newline_char = {'LF': '\n', 'CRLF': '\r\n', 'CR': '\r'}.get(newline_mode) or \
+                       (detect_line_endings(file_path) if os.path.exists(file_path) else os.linesep)
+
+        debug_print(debug, "PROCESSING FILE", file=file_path,
+                    newline_mode=newline_mode or "DETECTED", detected_newline=newline_char)
+
+        try:
+            with open(file_path, 'r', encoding='utf-8', newline=None) as f:
+                original_content = f.read()
+            debug_print(debug, "FILE CONTENT READ (raw)", content=original_content)
+        except FileNotFoundError:
+            if any(mod.get('action') == 'CREATE_FILE' for mod in change.get('modifications', [])):
+                original_content = ""
+                debug_print(debug, "FILE NOT FOUND (will be created)")
+            else:
+                return report_error({
+                    "status": "FAILED",
+                    "file_path": file_path,
+                    "error": {
+                        "code": "FILE_NOT_FOUND",
+                        "message": "Target file not found."
+                    }
+                })
+
+        # Normalize all line endings to LF for consistent internal processing.
+        internal_newline = '\n'
+        working_content = original_content.replace('\r\n', internal_newline).replace('\r', internal_newline)
+
+        for mod_idx, mod in enumerate(change.get('modifications', [])):
+            action = mod.get('action')
+            debug_print(debug, f"MODIFICATION #{mod_idx}", action=action)
+            if not action:
+                return report_error({
+                    "status": "FAILED",
+                    "file_path": file_path,
+                    "mod_idx": mod_idx,
+                    "error": {
+                        "code": "INVALID_MODIFICATION",
+                        "message": "'action' is a required field."
+                    }
+                })
+
+            content_to_add = mod.get('content', '')
+            if action == 'CREATE_FILE':
+                working_content = content_to_add.replace('\r\n', internal_newline).replace('\r', internal_newline)
+                break
+
+            target = mod.get('target', {}); snippet = target.get('snippet', '')
+            if not snippet:
+                return report_error({
+                    "status": "FAILED",
+                    "file_path": file_path,
+                    "mod_idx": mod_idx,
+                    "error": {
+                        "code": "INVALID_MODIFICATION",
+                        "message": f"'snippet' is required for action '{action}'."
+                    }
+                })
+
+            target_pos, error = find_target_in_content(working_content, target.get('anchor'), snippet, debug)
+            if error:
+                report = {
+                    "status": "FAILED",
+                    "file_path": file_path,
+                    "mod_idx": mod_idx,
+                    "error": error
+                }
+                report['error']['context']['action'] = action
+                return report_error(report)
+
+            start_pos, end_pos = target_pos
+            debug_print(debug, "TARGET FOUND", start_pos=start_pos, end_pos=end_pos,
+                        found_text=working_content[start_pos:end_pos])
+
+            first_char_pos = start_pos
+            while first_char_pos < len(working_content) and working_content[first_char_pos].isspace():
+                first_char_pos += 1
+            line_start_idx = working_content.rfind(internal_newline, 0, first_char_pos) + 1
+            indentation = working_content[line_start_idx:first_char_pos]
+
+            indented_content = internal_newline.join(indentation + line for line in content_to_add.splitlines())
+
+            before_block = working_content[:line_start_idx]
+            original_block = working_content[line_start_idx:end_pos]
+            after_block = working_content[end_pos:]
+
+            # Ensure the new block ends with a newline to maintain structure.
+            new_block = indented_content
+            if new_block and not new_block.endswith(internal_newline):
+                new_block += internal_newline
+
+            if action == 'REPLACE':
+                working_content = before_block + new_block + after_block
+            elif action == 'INSERT_AFTER':
+                working_content = before_block + original_block + new_block + after_block
+            elif action == 'INSERT_BEFORE':
+                working_content = before_block + new_block + original_block + after_block
+            elif action == 'DELETE':
+                working_content = before_block + after_block
+
+        # Post-processing: strip trailing whitespace from all lines.
+        lines = working_content.split(internal_newline)
+        stripped_lines = [line.rstrip(' \t') for line in lines]
+
+        # Convert line endings back to the original/specified format before writing.
+        final_content = newline_char.join(stripped_lines)
+
+        if not dry_run and final_content != original_content:
+            debug_print(debug, "WRITING FILE", path=file_path, content=final_content)
+            os.makedirs(os.path.dirname(file_path) or '.', exist_ok=True)
+            with open(file_path, 'w', encoding='utf-8', newline='') as f:
+                f.write(final_content)
+        elif dry_run: debug_print(debug, "DRY RUN: SKIPPING WRITE")
+        else: debug_print(debug, "NO CHANGES: SKIPPING WRITE")
+
+    return {"status": "SUCCESS"}
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Apply an AI-friendly Patch (ap) file.")
+    parser.add_argument("--patch", required=True, help="Path to the .ap patch file.")
+    parser.add_argument("--dir", default=".", help="The root directory of the source code.")
+    parser.add_argument("--dry-run", action="store_true", help="Show changes without modifying files.")
+    parser.add_argument("--json-report", action="store_true", help="Output machine-readable JSON on failure.")
+    parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging.")
+
+    args = parser.parse_args()
+    result = apply_patch(args.patch, args.dir, args.dry_run, args.json_report, args.debug)
+
+    if args.json_report and result['status'] != 'SUCCESS':
+        print(json.dumps(result, indent=2))
+
+    if result["status"] != "SUCCESS":
+        exit(1)

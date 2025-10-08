@@ -1,0 +1,13 @@
+version: "1.0"
+changes:
+  - file_path: "02_sequences.py"
+    modifications:
+      - action: INSERT_AFTER
+        target:
+          snippet: "import os"
+        content: "import sys"
+      - action: DELETE
+        target:
+          snippet: |
+            def deprecated_method(self):
+                print("This should be removed.")

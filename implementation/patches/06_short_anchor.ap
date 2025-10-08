@@ -1,0 +1,9 @@
+version: "1.0"
+changes:
+  - file_path: "06_short_anchor.py"
+    modifications:
+      - action: REPLACE
+        target:
+          anchor: "def square(x):"
+          snippet: "return x * x"
+        content: "return pow(x, 2) # Use the pow function"

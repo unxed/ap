@@ -1,0 +1,9 @@
+version: "1.0"
+changes:
+  - file_path: "09_error_src.py"
+    modifications:
+      - action: REPLACE
+        target:
+          anchor: "def  my_function(arg1, arg2):"
+          snippet: 'print("Hello")'
+        content: "pass"

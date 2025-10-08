@@ -1,0 +1,9 @@
+version: "1.0"
+changes:
+  - file_path: "05_crlf.txt"
+    newline: CRLF
+    modifications:
+      - action: REPLACE
+        target:
+          snippet: "Second line to be replaced."
+        content: "This is the new second line."

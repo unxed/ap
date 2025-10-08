@@ -1,0 +1,8 @@
+version: "1.0"
+changes:
+  - file_path: "03_tabs.py"
+    modifications:
+      - action: INSERT_AFTER
+        target:
+          snippet: '# A new line will be added here'
+        content: 'print("...doing the work...")'

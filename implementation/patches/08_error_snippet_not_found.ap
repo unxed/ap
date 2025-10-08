@@ -1,0 +1,9 @@
+version: "1.0"
+changes:
+  - file_path: "08_error_src.py"
+    modifications:
+      - action: REPLACE
+        target:
+          anchor: "def say_hello(self, name):"
+          snippet: 'return f"Hello, {name}!" # Greet the user'
+        content: "pass"

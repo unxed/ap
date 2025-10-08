@@ -1,0 +1,7 @@
+version: "1.0"
+changes:
+  - file_path: "07_empty_lines.py"
+    modifications:
+      - action: DELETE
+        target:
+          snippet: "# Target line for deletion"

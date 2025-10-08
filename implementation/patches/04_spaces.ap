@@ -1,0 +1,8 @@
+version: "1.0"
+changes:
+  - file_path: "04_spaces.py"
+    modifications:
+      - action: INSERT_AFTER
+        target:
+          snippet: '# A new line will be added here'
+        content: 'print(f"Iteration {i}")'

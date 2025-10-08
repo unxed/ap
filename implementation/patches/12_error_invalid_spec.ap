@@ -1,0 +1,7 @@
+version: "1.0"
+changes:
+  - file_path: "dummy.txt"
+    modifications:
+      - target:
+          snippet: "dummy"
+        content: "new content"

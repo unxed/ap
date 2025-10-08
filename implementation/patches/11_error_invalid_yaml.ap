@@ -1,0 +1,3 @@
+version: '1.0'
+changes:
+	- file_path: 'dummy.txt'
