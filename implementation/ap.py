@@ -211,7 +211,18 @@ def apply_patch(
                 })
 
             content_to_add = mod.get('content', '')
+
+            # Idempotency Check for CREATE_FILE
             if action == 'CREATE_FILE':
+                if os.path.exists(file_path):
+                    with open(file_path, 'r', encoding='utf-8', newline=None) as f_check:
+                        existing_content = f_check.read().replace('\r\n', internal_newline).replace('\r', internal_newline)
+                    normalized_existing = "\n".join(l.strip() for l in existing_content.strip().splitlines())
+                    normalized_new = "\n".join(l.strip() for l in content_to_add.strip().splitlines())
+                    if normalized_existing == normalized_new:
+                        debug_print(debug, "IDEMPOTENCY SKIP", message="File already exists with matching content.", file_path=file_path)
+                        working_content = existing_content # Ensure no changes are written
+                        break # Skip all other modifications for this file
                 working_content = content_to_add.replace('\r\n', internal_newline).replace('\r', internal_newline)
                 break
 
@@ -228,57 +239,90 @@ def apply_patch(
                 })
 
             target_pos, error = find_target_in_content(working_content, target.get('anchor'), snippet, debug)
+
+            # Idempotency Checks (when snippet is not found)
+            if error and error.get('code') == 'SNIPPET_NOT_FOUND':
+                if action == 'DELETE':
+                    debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet to delete is already gone.", snippet=snippet)
+                    continue
+                if action == 'REPLACE':
+                    # If snippet isn't found, check if the replacement content is already there instead.
+                    # We turn off debug for this sub-search to avoid confusing logs.
+                    content_pos, _ = find_target_in_content(working_content, target.get('anchor'), content_to_add, debug=False)
+                    if content_pos:
+                        debug_print(debug, "IDEMPOTENCY SKIP", message="REPLACE snippet not found, but replacement content exists.", snippet=snippet)
+                        continue
+
             if error:
-                report = {
-                    "status": "FAILED",
-                    "file_path": file_path,
-                    "mod_idx": mod_idx,
-                    "error": error
-                }
+                report = {"status": "FAILED", "file_path": file_path, "mod_idx": mod_idx, "error": error}
                 report['error']['context']['action'] = action
-
-                # Expand selection to include surrounding blank lines if requested.
-                leading_blanks_to_include = target.get('include_leading_blank_lines', 0)
-                if leading_blanks_to_include > 0:
-                    expanded_start = start_pos
-                    for _ in range(leading_blanks_to_include):
-                        line_start = working_content.rfind(internal_newline, 0, expanded_start)
-                        if line_start == -1: break # Start of file
-                        prev_line_start = working_content.rfind(internal_newline, 0, line_start - 1) + 1
-                        prev_line = working_content[prev_line_start:line_start]
-                        if prev_line.strip() == "":
-                            expanded_start = prev_line_start
-                        else:
-                            break
-                    start_pos = expanded_start
-
-                trailing_blanks_to_include = target.get('include_trailing_blank_lines', 0)
-                if trailing_blanks_to_include > 0:
-                    expanded_end = end_pos
-                    for _ in range(trailing_blanks_to_include):
-                        line_end = working_content.find(internal_newline, expanded_end)
-                        if line_end == -1: line_end = len(working_content) # End of file case
-                        else: line_end += 1 # Include the newline char itself
-
-                        next_line_end = working_content.find(internal_newline, line_end)
-                        if next_line_end == -1: next_line_end = len(working_content)
-
-                        next_line = working_content[line_end:next_line_end]
-                        if next_line.strip() == "":
-                            expanded_end = next_line_end
-                            if expanded_end < len(working_content): # If not at very end of file, consume newline
-                               expanded_end += 1
-                        else:
-                            break
-                    # Adjust end_pos, being careful not to over-consume the last newline
-                    final_char = working_content[expanded_end-1] if expanded_end > 0 else ''
-                    if final_char == internal_newline and expanded_end > end_pos:
-                         end_pos = expanded_end -1
-                    else:
-                         end_pos = expanded_end
                 return report_error(report)
 
             start_pos, end_pos = target_pos
+
+            debug_print(debug, "TARGET FOUND", start_pos=start_pos, end_pos=end_pos,
+                        found_text=working_content[start_pos:end_pos])
+
+            # Expand selection to include surrounding blank lines if requested.
+            leading_blanks_to_include = target.get('include_leading_blank_lines', 0)
+            if leading_blanks_to_include > 0:
+                expanded_start = start_pos
+                for _ in range(leading_blanks_to_include):
+                    line_start_idx = working_content.rfind(internal_newline, 0, expanded_start -1)
+                    if line_start_idx == -1: # Beginning of file
+                        if working_content[:expanded_start].strip() == "": expanded_start = 0
+                        break
+                    prev_line = working_content[line_start_idx+1:expanded_start]
+                    if prev_line.strip() == "": expanded_start = line_start_idx + 1
+                    else: break
+                start_pos = expanded_start
+
+            trailing_blanks_to_include = target.get('include_trailing_blank_lines', 0)
+            if trailing_blanks_to_include > 0:
+                current_pos = end_pos
+                for _ in range(trailing_blanks_to_include):
+                    # Find the end of the next line
+                    next_newline_pos = working_content.find(internal_newline, current_pos)
+
+                    if next_newline_pos == -1:
+                        # This is the last line in the file. Check if it's blank.
+                        if working_content[current_pos:].strip() == "":
+                            end_pos = len(working_content)
+                        break # No more lines to check
+
+                    line_content = working_content[current_pos:next_newline_pos]
+                    if line_content.strip() == "":
+                        # The line is blank, expand selection to include its newline
+                        end_pos = next_newline_pos + 1
+                        current_pos = end_pos
+                    else:
+                        # Next line is not blank, so we stop.
+                        break
+
+            # Idempotency Checks (when snippet is found)
+            def normalize_block(text): return "\n".join(line.strip() for line in text.strip().splitlines())
+
+            if action == 'REPLACE':
+                # If the existing block already matches the content, skip.
+                if normalize_block(working_content[start_pos:end_pos]) == normalize_block(content_to_add):
+                    debug_print(debug, "IDEMPOTENCY SKIP", message="REPLACE content already present.")
+                    continue
+            elif action == 'INSERT_AFTER':
+                # If the content to add is already present right after the snippet, skip.
+                next_chunk = working_content[end_pos:]
+                if normalize_block(next_chunk).startswith(normalize_block(content_to_add)):
+                     debug_print(debug, "IDEMPOTENCY SKIP", message="INSERT_AFTER content already present.")
+                     continue
+            elif action == 'INSERT_BEFORE':
+                # If the content to add is already present right before the snippet, skip.
+                prev_chunk = working_content[:start_pos]
+                if normalize_block(prev_chunk).endswith(normalize_block(content_to_add)):
+                    debug_print(debug, "IDEMPOTENCY SKIP", message="INSERT_BEFORE content already present.")
+                    continue
+
+            if action == 'DELETE':
+                working_content = working_content[:start_pos] + working_content[end_pos:]
+                continue
             debug_print(debug, "TARGET FOUND", start_pos=start_pos, end_pos=end_pos,
                         found_text=working_content[start_pos:end_pos])
 

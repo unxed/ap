@@ -1,0 +1,18 @@
+version: "1.0"
+changes:
+  - file_path: "18_idempotency.py"
+    modifications:
+      - action: INSERT_AFTER
+        target:
+          snippet: 'def my_function():'
+        content: '    """This function was patched."""'
+      - action: REPLACE
+        target:
+          snippet: 'print("Initial line")'
+        content: 'print("Patched line")'
+      - action: DELETE
+        target:
+          snippet: |
+            def to_be_deleted():
+                pass
+          include_leading_blank_lines: 1

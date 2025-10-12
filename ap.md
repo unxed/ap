@@ -145,7 +145,32 @@
      consecutive blank lines immediately following the `snippet`.
 
 ## 3. Patcher Implementation Requirements
-### 3.1. Search and Location Algorithm
+### 3.1. Idempotency
+
+   A Patcher MUST apply modifications idempotently. Applying the same patch
+   multiple times to the same source tree MUST NOT cause subsequent changes
+   or errors after the first successful application. To achieve this, each
+   modification within a change MUST be checked for its state before the
+   operation is attempted, according to the following rules:
+
+   - **`DELETE`**: If the `target` `snippet` is not found, the operation is
+     considered already complete and MUST be skipped.
+
+   - **`REPLACE`**: If the content at the target location is already
+     identical to the modification's `content`, the operation MUST be
+     skipped.
+
+   - **`INSERT_AFTER`**: If the code immediately following the `target`
+     `snippet` already matches the `content`, the operation MUST be skipped.
+
+   - **`INSERT_BEFORE`**: If the code immediately preceding the `target`
+     `snippet` already matches the `content`, the operation MUST be skipped.
+
+   - **`CREATE_FILE`**: If a file at `file_path` already exists and its
+     content is identical to the provided `content`, the operation MUST
+     be skipped. If the file exists with different content, the Patcher
+     SHOULD report an error to prevent overwriting an unrelated file.
+### 3.2. Search and Location Algorithm
 
    A Patcher utility MUST follow these rules when locating a `target`. The
    search strategies for `anchor` and `snippet` are intentionally different
@@ -180,7 +205,7 @@
        `snippet` within its search scope (either the full file or the
        `anchor`'s scope). If zero or more than one occurrences are found,
        the Patcher MUST report an ambiguity error.
-### 3.2. Modification Logic
+### 3.3. Modification Logic
 
    - **Indentation**: When performing any action involving `content`
      (`REPLACE`, `INSERT_AFTER`, `INSERT_BEFORE`), the Patcher SHOULD
@@ -205,7 +230,7 @@
      are defined. The output of one modification becomes the input for
      the search phase of the next.
 
-### 3.3. Error Handling
+### 3.4. Error Handling
 
    The Patcher MUST provide clear, human-readable error messages for
    failure conditions, including but not limited to:
@@ -214,7 +239,7 @@
    - Ambiguous anchor or snippet (multiple occurrences found).
    - Malformed patch file.
 
-### 3.4. Post-processing
+### 3.5. Post-processing
 
    After all modifications for a file have been applied, and before the
    file is written to disk, the Patcher MUST perform a final post-
