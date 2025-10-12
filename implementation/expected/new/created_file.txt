@@ -1,0 +1,2 @@
+This file was created by a test.
+It should use CRLF line endings.

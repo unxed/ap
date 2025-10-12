@@ -1,0 +1,15 @@
+version: "1.0"
+changes:
+  - file_path: "16_empty_actions.txt"
+    modifications:
+      - action: REPLACE
+        target:
+          snippet: "Line 1 to be replaced with nothing."
+        content: ""
+      - action: INSERT_AFTER
+        target:
+          snippet: "Line 2 to have nothing inserted after."
+        content: ""
+      - action: DELETE
+        target:
+          snippet: "Line 3 to be deleted."

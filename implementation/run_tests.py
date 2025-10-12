@@ -11,6 +11,11 @@ TESTS = [
     ("10_error_ambiguous", "negative", "AMBIGUOUS_MATCH"),
     ("11_error_invalid_yaml", "negative", "INVALID_PATCH_FILE"),
     ("12_error_invalid_spec", "negative", "INVALID_MODIFICATION"),
+    ("13_create_file", "positive", None),
+    ("14_edge_cases", "positive", None),
+    ("15_robustness", "positive", None),
+    ("16_empty_actions", "positive", None),
+    ("17_error_file_not_found", "negative", "FILE_NOT_FOUND"),
 ]
 
 def get_paths(test_name):
@@ -22,6 +27,11 @@ def get_paths(test_name):
         "08_error_snippet_not_found": "08_error_src.py",
         "09_error_anchor_not_found": "09_error_src.py",
         "10_error_ambiguous": "10_error_src.py",
+        "13_create_file": "dummy.txt",
+        "14_edge_cases": "14_edge_cases.py",
+        "15_robustness": "15_robustness.js",
+        "16_empty_actions": "16_empty_actions.txt",
+        "17_error_file_not_found": "dummy.txt",
         "11_error_invalid_yaml": "dummy.txt", "12_error_invalid_spec": "dummy.txt"
     }
     src_filename = file_map.get(test_name)
@@ -42,9 +52,13 @@ def run_positive_test(test_name, debug=False):
             return False
 
         # Compare as raw bytes to correctly validate line endings (LF vs CRLF).
-        with open(os.path.join(test_dir, os.path.basename(src_file)), 'rb') as f:
+        actual_file_rel_path = "new/created_file.txt" if test_name == "13_create_file" else os.path.basename(src_file)
+
+        with open(os.path.join(test_dir, actual_file_rel_path), 'rb') as f:
             actual_raw = f.read()
-        with open(expected_file, 'rb') as f:
+
+        expected_file_path = os.path.join("expected", actual_file_rel_path) if test_name == "13_create_file" else expected_file
+        with open(expected_file_path, 'rb') as f:
             expected_raw = f.read()
 
         if actual_raw == expected_raw:
@@ -55,7 +69,7 @@ def run_positive_test(test_name, debug=False):
             expected = expected_raw.decode('utf-8', 'replace')
             diff = difflib.unified_diff(
                 expected.splitlines(keepends=True), actual.splitlines(keepends=True),
-                fromfile=expected_file, tofile="actual_result"
+                fromfile=expected_file_path, tofile="actual_result"
             )
             print("--- DIFF ---\n" + ''.join(diff)); return False
     finally:
@@ -78,7 +92,7 @@ def run_negative_test(test_name, expected_code, debug=False):
                   f"'{report.get('error', {}).get('code')}'.\n" + json.dumps(report, indent=2)); return False
         if expected_code == "SNIPPET_NOT_FOUND" and "fuzzy_matches" not in report.get("error", {}).get("context", {}):
             print(f"❌ FAILED: {test_name}. Expected 'fuzzy_matches' in error report."); return False
-        
+
         print(f"✅ PASSED: {test_name} (Correctly failed as expected)"); return True
     finally:
         shutil.rmtree(test_dir)
@@ -87,7 +101,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run the full test suite for the 'ap' patcher.")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging for each test.")
     args = parser.parse_args()
-    
+
     print("===========================\n  Running `ap` Test Suite\n===========================\n")
     results = []
     for name, type, code in TESTS:
@@ -98,10 +112,10 @@ def main():
                 results.append(run_negative_test(name, code, debug=args.debug))
         except Exception as e:
             print(f"❌ CRITICAL FAILURE in test '{name}': {e}"); results.append(False)
-    
+
     passed, total = sum(results), len(results)
     print(f"\n===========================\n  Summary: {passed} / {total} tests passed.\n===========================")
-    
+
     if all(results):
         print("✅ All tests passed successfully!"); sys.exit(0)
     else:

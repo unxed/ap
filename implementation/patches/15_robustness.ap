@@ -1,0 +1,13 @@
+version: "1.0"
+changes:
+  - file_path: "15_robustness.js"
+    modifications:
+      - action: REPLACE
+        target:
+          anchor: "const unsafeConfig = {"
+          snippet: 'setting: "default" // This one SHOULD be changed'
+        content: 'setting: "overridden" // Changed safely within anchor'
+      - action: REPLACE
+        target:
+          snippet: "// Special chars: &*{}[]"
+        content: "// All special characters handled correctly"

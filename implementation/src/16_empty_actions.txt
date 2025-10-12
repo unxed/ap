@@ -1,0 +1,3 @@
+Line 1 to be replaced with nothing.
+Line 2 to have nothing inserted after.
+Line 3 to be deleted.

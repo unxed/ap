@@ -1,0 +1,16 @@
+version: "1.0"
+changes:
+  - file_path: "14_edge_cases.py"
+    modifications:
+      - action: INSERT_BEFORE
+        target:
+          snippet: "# Start of file"
+        content: "# This is a new header."
+      - action: REPLACE
+        target:
+          snippet: 'print("original line")'
+        content: 'print("new line with trailing whitespace")    '
+      - action: INSERT_AFTER
+        target:
+          snippet: "# End of file"
+        content: "# This is a new footer."

@@ -1,0 +1,9 @@
+version: "1.0"
+changes:
+  - file_path: "new/created_file.txt"
+    newline: CRLF
+    modifications:
+      - action: CREATE_FILE
+        content: |
+          This file was created by a test.
+          It should use CRLF line endings.

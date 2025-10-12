@@ -1,0 +1,8 @@
+version: "1.0"
+changes:
+  - file_path: "non_existent_file.txt"
+    modifications:
+      - action: REPLACE
+        target:
+          snippet: "some text"
+        content: "new text"
