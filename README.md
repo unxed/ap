@@ -22,6 +22,22 @@ Instead of generating raw code, an AI can generate an `ap` patch file—a simple
 
 Traditional patch formats (like `diff`) are not suitable for AIs because they rely on precise line numbers, which AIs struggle with. `ap` is designed from the ground up to be robust and AI-friendly, using semantic code snippets to locate changes instead of line numbers.
 
+## What `ap` Is Not
+
+To better understand the purpose of `ap`, it's equally important to understand what it is *not* designed to be.
+
+*   **A general-purpose diff format.** `ap` is not a replacement for `diff` or `git diff`. It was designed not to describe the differences between two versions of a file, but to contain specific, semantically meaningful *instructions* for how to modify it.
+
+*   **A diffing tool.** There are no plans for an `ap diff` utility that would create a patch by comparing two files. `ap` patches are designed to be *generated* by an AI, not *computed* by a diffing algorithm.
+
+*   **A replacement for your favorite editor's AI plugin or console AI client.** On the contrary, `ap` can make these tools even more powerful.
+
+*   **An efficient tool for modifying highly repetitive data.** The reliance on unique snippets makes `ap` poorly suited for tasks like modifying the 20th identical entry in a large array initialization. Since the `snippet` would match every entry, it would create an ambiguity error. You would likely need to replace the entire block, whereas a line-number-based tool or a simple script would be more effective.
+
+*   **A version control system.** `ap` does not track history, manage branches, or resolve merge conflicts. It is a tool for applying a single, atomic set of changes to a codebase.
+
+*   **A binary patch format.** `ap` is designed exclusively for text files, primarily source code. It is not suitable for modifying compiled files, images, or other binary data.
+
 ## Getting Started
 
 Let's say you have a file `greeter.py`:
