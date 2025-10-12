@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import yaml
 import os
 import argparse
@@ -416,14 +417,14 @@ def apply_patch(
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Apply an AI-friendly Patch (ap) file.")
-    parser.add_argument("--patch", required=True, help="Path to the .ap patch file.")
+    parser.add_argument("patch_file", help="Path to the .ap patch file.")
     parser.add_argument("--dir", default=".", help="The root directory of the source code.")
     parser.add_argument("--dry-run", action="store_true", help="Show changes without modifying files.")
     parser.add_argument("--json-report", action="store_true", help="Output machine-readable JSON on failure.")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging.")
 
     args = parser.parse_args()
-    result = apply_patch(args.patch, args.dir, args.dry_run, args.json_report, args.debug)
+    result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug)
 
     if args.json_report and result['status'] != 'SUCCESS':
         print(json.dumps(result, indent=2))

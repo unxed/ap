@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os, sys, shutil, tempfile, difflib, json, argparse
 from ap import apply_patch
 
