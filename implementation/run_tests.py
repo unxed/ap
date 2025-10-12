@@ -18,6 +18,7 @@ TESTS = [
     ("17_error_file_not_found", "negative", "FILE_NOT_FOUND"),
     ("18_idempotency", "positive", None),
     ("19_idempotency_noop", "positive", None),
+    ("20_error_path_traversal", "negative", "INVALID_FILE_PATH"),
 ]
 
 def get_paths(test_name):
@@ -37,6 +38,7 @@ def get_paths(test_name):
         "11_error_invalid_yaml": "dummy.txt", "12_error_invalid_spec": "dummy.txt",
         "18_idempotency": "18_idempotency.py",
         "19_idempotency_noop": "19_idempotency_noop.py",
+        "20_error_path_traversal": "dummy.txt",
     }
     src_filename = file_map.get(test_name)
     if not src_filename:

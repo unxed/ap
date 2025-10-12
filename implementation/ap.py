@@ -166,7 +166,24 @@ def apply_patch(
         })
 
     for change in data.get('changes', []):
-        file_path = os.path.join(project_dir, change['file_path'])
+        relative_path = change['file_path']
+
+        # Security check: Prevent path traversal. The final path must be within the project directory.
+        real_project_dir = os.path.realpath(project_dir)
+        # Construct the path and then get its real path for comparison.
+        real_file_path = os.path.realpath(os.path.join(project_dir, relative_path))
+
+        # The real path of the file must start with the real path of the project directory.
+        # os.path.join is used to add a trailing separator if needed, preventing /foo/bar from matching /foo/barbaz
+        if not real_file_path.startswith(os.path.join(real_project_dir, '')):
+            return report_error({
+                "status": "FAILED", "file_path": relative_path,
+                "error": {
+                    "code": "INVALID_FILE_PATH",
+                    "message": "Path traversal detected. File path must be relative and stay within the project directory."
+                }})
+
+        file_path = os.path.join(project_dir, relative_path)
         newline_mode = change.get('newline')
         newline_char = {'LF': '\n', 'CRLF': '\r\n', 'CR': '\r'}.get(newline_mode) or \
                        (detect_line_endings(file_path) if os.path.exists(file_path) else os.linesep)

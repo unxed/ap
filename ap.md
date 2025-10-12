@@ -87,7 +87,10 @@
    mapping containing the following keys:
 
    - `file_path` (string, REQUIRED): The path to the target file,
-     relative to the root of the project directory.
+     relative to the root of the project directory. For security, this
+     path MUST NOT contain components that traverse parent directories
+     (e.g., `..`). This ensures the Patcher only operates within
+     the specified project directory.
 
    - `modifications` (list, REQUIRED): A list of `Modification` objects
      to be applied sequentially to this file.

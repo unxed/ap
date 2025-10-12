@@ -1,0 +1,6 @@
+version: "1.0"
+changes:
+  - file_path: "../path_traversal_attack.txt"
+    modifications:
+      - action: CREATE_FILE
+        content: "This file should not be created."
