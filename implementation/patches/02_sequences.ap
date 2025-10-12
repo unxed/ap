@@ -11,3 +11,4 @@ changes:
           snippet: |
             def deprecated_method(self):
                 print("This should be removed.")
+          include_trailing_blank_lines: 1

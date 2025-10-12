@@ -131,12 +131,18 @@
    - `snippet` (string, REQUIRED): A verbatim, potentially multi-line
      string of code to be located within the file. This is the primary
      locator.
-- `anchor` (string, OPTIONAL): A larger, stable block of code (e.g., a
-  full function or class definition) that contains the `snippet`. Its
-  content MUST be a verbatim, character-for-character match of the code
-  in the target file, including all whitespace and indentation. If
-  provided, the Patcher MUST confine its search for the `snippet` to
-  the scope of the `anchor`. This is used to resolve ambiguity.
+   - `anchor` (string, OPTIONAL): A larger, stable block of code (e.g., a
+     full function or class definition) that contains the `snippet`. Its
+     content MUST be a verbatim, character-for-character match of the code
+     in the target file, including all whitespace and indentation. If
+     provided, the Patcher MUST confine its search for the `snippet` to
+     the scope of the `anchor`. This is used to resolve ambiguity.
+   - `include_leading_blank_lines` (integer, OPTIONAL): When specified, the
+     Patcher's selection is expanded to include up to this number of
+     consecutive blank lines immediately preceding the `snippet`.
+   - `include_trailing_blank_lines` (integer, OPTIONAL): When specified, the
+     Patcher's selection is expanded to include up to this number of
+     consecutive blank lines immediately following the `snippet`.
 
 ## 3. Patcher Implementation Requirements
 ### 3.1. Search and Location Algorithm
@@ -180,6 +186,19 @@
      (`REPLACE`, `INSERT_AFTER`, `INSERT_BEFORE`), the Patcher SHOULD
      determine the indentation of the first line of the original `snippet`
      and apply that same indentation to every line of the new `content`.
+
+   - **Blank Line Inclusion**: If `include_leading_blank_lines` or
+     `include_trailing_blank_lines` are specified in the `target`, the
+     Patcher MUST expand the region to be modified to include the
+     specified number of consecutive blank lines before or after the located
+     `snippet`. This allows for controlled removal of surrounding whitespace,
+     especially when using the `DELETE` action.
+     - **Blank Line Inclusion**: If `include_leading_blank_lines` or
+       `include_trailing_blank_lines` are specified in the `target`, the
+       Patcher MUST expand the region to be modified to include the
+       specified number of consecutive blank lines before or after the located
+       `snippet`. This allows for controlled removal of surrounding whitespace,
+       especially when using the `DELETE` action.
 
    - **Sequential Application**: Modifications within a single
      `File Change` object MUST be applied sequentially in the order they

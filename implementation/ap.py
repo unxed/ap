@@ -54,25 +54,28 @@ def smart_find(content: str, snippet: str) -> List[Tuple[int, int]]:
     if not snippet_lines: return []
 
     occurrences = []
-    i = 0
-    while i < len(original_lines):
-        block_to_check_lines, line_indices = [], []
-        j = i
-        while len(block_to_check_lines) < len(snippet_lines) and j < len(original_lines):
-            line = original_lines[j]
-            if line.strip(): block_to_check_lines.append(line)
-            line_indices.append(j)
-            j += 1
+    for i in range(len(original_lines)):
+        # A match must start on a non-blank line
+        if not original_lines[i].strip():
+            continue
 
-        if len(block_to_check_lines) < len(snippet_lines): break
+        content_lines_found = []
+        end_line_index = i - 1 # Will be updated in the loop
 
-        if [line.strip() for line in block_to_check_lines] == normalized_snippet_lines:
-            start_pos = len("".join(original_lines[:line_indices[0]]))
-            end_pos = len("".join(original_lines[:line_indices[-1] + 1]))
+        # Scan forward from line i to find a potential match
+        temp_j = i
+        while len(content_lines_found) < len(snippet_lines) and temp_j < len(original_lines):
+            line = original_lines[temp_j]
+            if line.strip():
+                content_lines_found.append(line)
+            end_line_index = temp_j
+            temp_j += 1
+
+        if [line.strip() for line in content_lines_found] == normalized_snippet_lines:
+            start_pos = len("".join(original_lines[:i]))
+            end_pos = len("".join(original_lines[:end_line_index + 1]))
             occurrences.append((start_pos, end_pos))
-            i = line_indices[-1] + 1
-        else:
-            i += 1
+
     return occurrences
 
 def find_target_in_content(
@@ -233,11 +236,82 @@ def apply_patch(
                     "error": error
                 }
                 report['error']['context']['action'] = action
+
+                # Expand selection to include surrounding blank lines if requested.
+                leading_blanks_to_include = target.get('include_leading_blank_lines', 0)
+                if leading_blanks_to_include > 0:
+                    expanded_start = start_pos
+                    for _ in range(leading_blanks_to_include):
+                        line_start = working_content.rfind(internal_newline, 0, expanded_start)
+                        if line_start == -1: break # Start of file
+                        prev_line_start = working_content.rfind(internal_newline, 0, line_start - 1) + 1
+                        prev_line = working_content[prev_line_start:line_start]
+                        if prev_line.strip() == "":
+                            expanded_start = prev_line_start
+                        else:
+                            break
+                    start_pos = expanded_start
+
+                trailing_blanks_to_include = target.get('include_trailing_blank_lines', 0)
+                if trailing_blanks_to_include > 0:
+                    expanded_end = end_pos
+                    for _ in range(trailing_blanks_to_include):
+                        line_end = working_content.find(internal_newline, expanded_end)
+                        if line_end == -1: line_end = len(working_content) # End of file case
+                        else: line_end += 1 # Include the newline char itself
+
+                        next_line_end = working_content.find(internal_newline, line_end)
+                        if next_line_end == -1: next_line_end = len(working_content)
+
+                        next_line = working_content[line_end:next_line_end]
+                        if next_line.strip() == "":
+                            expanded_end = next_line_end
+                            if expanded_end < len(working_content): # If not at very end of file, consume newline
+                               expanded_end += 1
+                        else:
+                            break
+                    # Adjust end_pos, being careful not to over-consume the last newline
+                    final_char = working_content[expanded_end-1] if expanded_end > 0 else ''
+                    if final_char == internal_newline and expanded_end > end_pos:
+                         end_pos = expanded_end -1
+                    else:
+                         end_pos = expanded_end
                 return report_error(report)
 
             start_pos, end_pos = target_pos
             debug_print(debug, "TARGET FOUND", start_pos=start_pos, end_pos=end_pos,
                         found_text=working_content[start_pos:end_pos])
+
+            # Expand selection to include surrounding blank lines if requested.
+            leading_blanks_to_include = target.get('include_leading_blank_lines', 0)
+            if leading_blanks_to_include > 0:
+                expanded_start = start_pos
+                for _ in range(leading_blanks_to_include):
+                    line_start_idx = working_content.rfind(internal_newline, 0, expanded_start -1)
+                    if line_start_idx == -1: # Beginning of file
+                        if working_content[:expanded_start].strip() == "": expanded_start = 0
+                        break
+                    prev_line = working_content[line_start_idx+1:expanded_start]
+                    if prev_line.strip() == "": expanded_start = line_start_idx + 1
+                    else: break
+                start_pos = expanded_start
+
+            trailing_blanks_to_include = target.get('include_trailing_blank_lines', 0)
+            if trailing_blanks_to_include > 0:
+                expanded_end = end_pos
+                for _ in range(trailing_blanks_to_include):
+                    line_end_idx = working_content.find(internal_newline, expanded_end)
+                    if line_end_idx == -1: # End of file
+                        if working_content[expanded_end:].strip() == "": expanded_end = len(working_content)
+                        break
+                    next_line = working_content[expanded_end:line_end_idx]
+                    if next_line.strip() == "": expanded_end = line_end_idx + 1
+                    else: break
+                end_pos = expanded_end
+
+            if action == 'DELETE':
+                working_content = working_content[:start_pos] + working_content[end_pos:]
+                continue
 
             first_char_pos = start_pos
             while first_char_pos < len(working_content) and working_content[first_char_pos].isspace():
@@ -247,23 +321,20 @@ def apply_patch(
 
             indented_content = internal_newline.join(indentation + line for line in content_to_add.splitlines())
 
-            before_block = working_content[:line_start_idx]
-            original_block = working_content[line_start_idx:end_pos]
+            before_block = working_content[:start_pos]
+            original_block = working_content[start_pos:end_pos]
             after_block = working_content[end_pos:]
 
             # Ensure the new block ends with a newline to maintain structure.
-            new_block = indented_content
-            if new_block and not new_block.endswith(internal_newline):
-                new_block += internal_newline
+            if indented_content and not indented_content.endswith(internal_newline):
+                indented_content += internal_newline
 
             if action == 'REPLACE':
-                working_content = before_block + new_block + after_block
+                working_content = before_block + indented_content + after_block
             elif action == 'INSERT_AFTER':
-                working_content = before_block + original_block + new_block + after_block
+                working_content = before_block + original_block + indented_content + after_block
             elif action == 'INSERT_BEFORE':
-                working_content = before_block + new_block + original_block + after_block
-            elif action == 'DELETE':
-                working_content = before_block + after_block
+                working_content = before_block + indented_content + original_block + after_block
 
         # Post-processing: strip trailing whitespace from all lines.
         lines = working_content.split(internal_newline)
