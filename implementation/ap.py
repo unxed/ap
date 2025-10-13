@@ -170,22 +170,16 @@ def apply_patch(
     except Exception as e:
         return report_error({
             "status": "FAILED",
-            "error": {
-                "code": "INVALID_PATCH_FILE",
-                "message": str(e)
-            }
+            "error": { "code": "INVALID_PATCH_FILE", "message": str(e) }
         })
 
+    write_plan = []
+    # --- PHASE 1: VALIDATE AND PREPARE ALL CHANGES IN MEMORY ---
     for change in data.get('changes', []):
         relative_path = change['file_path']
 
-        # Security check: Prevent path traversal. The final path must be within the project directory.
         real_project_dir = os.path.realpath(project_dir)
-        # Construct the path and then get its real path for comparison.
         real_file_path = os.path.realpath(os.path.join(project_dir, relative_path))
-
-        # The real path of the file must start with the real path of the project directory.
-        # os.path.join is used to add a trailing separator if needed, preventing /foo/bar from matching /foo/barbaz
         if not real_file_path.startswith(os.path.join(real_project_dir, '')):
             return report_error({
                 "status": "FAILED", "file_path": relative_path,
@@ -199,28 +193,20 @@ def apply_patch(
         newline_char = {'LF': '\n', 'CRLF': '\r\n', 'CR': '\r'}.get(newline_mode) or \
                        (detect_line_endings(file_path) if os.path.exists(file_path) else os.linesep)
 
-        debug_print(debug, "PROCESSING FILE", file=file_path,
+        debug_print(debug, "PLANNING FOR FILE", file=file_path,
                     newline_mode=newline_mode or "DETECTED", detected_newline=newline_char)
 
         try:
-            with open(file_path, 'r', encoding='utf-8', newline=None) as f:
-                original_content = f.read()
-            debug_print(debug, "FILE CONTENT READ (raw)", content=original_content)
+            with open(file_path, 'r', encoding='utf-8', newline=None) as f: original_content = f.read()
         except FileNotFoundError:
             if any(mod.get('action') == 'CREATE_FILE' for mod in change.get('modifications', [])):
                 original_content = ""
-                debug_print(debug, "FILE NOT FOUND (will be created)")
             else:
                 return report_error({
-                    "status": "FAILED",
-                    "file_path": file_path,
-                    "error": {
-                        "code": "FILE_NOT_FOUND",
-                        "message": "Target file not found."
-                    }
+                    "status": "FAILED", "file_path": relative_path,
+                    "error": { "code": "FILE_NOT_FOUND", "message": "Target file not found." }
                 })
 
-        # Normalize all line endings to LF for consistent internal processing.
         internal_newline = '\n'
         working_content = original_content.replace('\r\n', internal_newline).replace('\r', internal_newline)
 
@@ -230,7 +216,7 @@ def apply_patch(
             if not action:
                 return report_error({
                     "status": "FAILED",
-                    "file_path": file_path,
+                    "file_path": relative_path,
                     "mod_idx": mod_idx,
                     "error": {
                         "code": "INVALID_MODIFICATION",
@@ -239,18 +225,18 @@ def apply_patch(
                 })
 
             content_to_add = mod.get('content', '')
-
-            # Idempotency Check for CREATE_FILE
             if action == 'CREATE_FILE':
                 if os.path.exists(file_path):
                     with open(file_path, 'r', encoding='utf-8', newline=None) as f_check:
-                        existing_content = f_check.read().replace('\r\n', internal_newline).replace('\r', internal_newline)
+                        existing_content = f_check.read() \
+                            .replace('\r\n', internal_newline) \
+                            .replace('\r', internal_newline)
                     normalized_existing = "\n".join(l.strip() for l in existing_content.strip().splitlines())
                     normalized_new = "\n".join(l.strip() for l in content_to_add.strip().splitlines())
                     if normalized_existing == normalized_new:
                         debug_print(debug, "IDEMPOTENCY SKIP", message="File already exists with matching content.", file_path=file_path)
-                        working_content = existing_content # Ensure no changes are written
-                        break # Skip all other modifications for this file
+                        working_content = existing_content
+                        break
                 working_content = content_to_add.replace('\r\n', internal_newline).replace('\r', internal_newline)
                 break
 
@@ -258,7 +244,7 @@ def apply_patch(
             if not snippet:
                 return report_error({
                     "status": "FAILED",
-                    "file_path": file_path,
+                    "file_path": relative_path,
                     "mod_idx": mod_idx,
                     "error": {
                         "code": "INVALID_MODIFICATION",
@@ -268,112 +254,39 @@ def apply_patch(
 
             target_pos, error = find_target_in_content(working_content, target.get('anchor'), snippet, debug)
 
-            # Idempotency Checks (when snippet is not found)
             if error and error.get('code') == 'SNIPPET_NOT_FOUND':
                 if action == 'DELETE':
                     debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet to delete is already gone.", snippet=snippet)
                     continue
                 if action == 'REPLACE':
-                    # If snippet isn't found, check if the replacement content is already there instead.
-                    # We turn off debug for this sub-search to avoid confusing logs.
                     content_pos, _ = find_target_in_content(working_content, target.get('anchor'), content_to_add, debug=False)
                     if content_pos:
                         debug_print(debug, "IDEMPOTENCY SKIP", message="REPLACE snippet not found, but replacement content exists.", snippet=snippet)
                         continue
-
             if error:
-                report = {"status": "FAILED", "file_path": file_path, "mod_idx": mod_idx, "error": error}
+                report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
                 report['error']['context']['action'] = action
                 return report_error(report)
 
             start_pos, end_pos = target_pos
-
-            debug_print(debug, "TARGET FOUND", start_pos=start_pos, end_pos=end_pos,
-                        found_text=working_content[start_pos:end_pos])
-
-            # Expand selection to include surrounding blank lines if requested.
             leading_blanks_to_include = target.get('include_leading_blank_lines', 0)
             if leading_blanks_to_include > 0:
                 expanded_start = start_pos
                 for _ in range(leading_blanks_to_include):
                     line_start_idx = working_content.rfind(internal_newline, 0, expanded_start -1)
-                    if line_start_idx == -1: # Beginning of file
+                    if line_start_idx == -1:
                         if working_content[:expanded_start].strip() == "": expanded_start = 0
                         break
                     prev_line = working_content[line_start_idx+1:expanded_start]
                     if prev_line.strip() == "": expanded_start = line_start_idx + 1
                     else: break
                 start_pos = expanded_start
-
-            trailing_blanks_to_include = target.get('include_trailing_blank_lines', 0)
-            if trailing_blanks_to_include > 0:
-                current_pos = end_pos
-                for _ in range(trailing_blanks_to_include):
-                    # Find the end of the next line
-                    next_newline_pos = working_content.find(internal_newline, current_pos)
-
-                    if next_newline_pos == -1:
-                        # This is the last line in the file. Check if it's blank.
-                        if working_content[current_pos:].strip() == "":
-                            end_pos = len(working_content)
-                        break # No more lines to check
-
-                    line_content = working_content[current_pos:next_newline_pos]
-                    if line_content.strip() == "":
-                        # The line is blank, expand selection to include its newline
-                        end_pos = next_newline_pos + 1
-                        current_pos = end_pos
-                    else:
-                        # Next line is not blank, so we stop.
-                        break
-
-            # Idempotency Checks (when snippet is found)
-            def normalize_block(text): return "\n".join(line.strip() for line in text.strip().splitlines())
-
-            if action == 'REPLACE':
-                # If the existing block already matches the content, skip.
-                if normalize_block(working_content[start_pos:end_pos]) == normalize_block(content_to_add):
-                    debug_print(debug, "IDEMPOTENCY SKIP", message="REPLACE content already present.")
-                    continue
-            elif action == 'INSERT_AFTER':
-                # If the content to add is already present right after the snippet, skip.
-                next_chunk = working_content[end_pos:]
-                if normalize_block(next_chunk).startswith(normalize_block(content_to_add)):
-                     debug_print(debug, "IDEMPOTENCY SKIP", message="INSERT_AFTER content already present.")
-                     continue
-            elif action == 'INSERT_BEFORE':
-                # If the content to add is already present right before the snippet, skip.
-                prev_chunk = working_content[:start_pos]
-                if normalize_block(prev_chunk).endswith(normalize_block(content_to_add)):
-                    debug_print(debug, "IDEMPOTENCY SKIP", message="INSERT_BEFORE content already present.")
-                    continue
-
-            if action == 'DELETE':
-                working_content = working_content[:start_pos] + working_content[end_pos:]
-                continue
-            debug_print(debug, "TARGET FOUND", start_pos=start_pos, end_pos=end_pos,
-                        found_text=working_content[start_pos:end_pos])
-
-            # Expand selection to include surrounding blank lines if requested.
-            leading_blanks_to_include = target.get('include_leading_blank_lines', 0)
-            if leading_blanks_to_include > 0:
-                expanded_start = start_pos
-                for _ in range(leading_blanks_to_include):
-                    line_start_idx = working_content.rfind(internal_newline, 0, expanded_start -1)
-                    if line_start_idx == -1: # Beginning of file
-                        if working_content[:expanded_start].strip() == "": expanded_start = 0
-                        break
-                    prev_line = working_content[line_start_idx+1:expanded_start]
-                    if prev_line.strip() == "": expanded_start = line_start_idx + 1
-                    else: break
-                start_pos = expanded_start
-
             trailing_blanks_to_include = target.get('include_trailing_blank_lines', 0)
             if trailing_blanks_to_include > 0:
                 expanded_end = end_pos
                 for _ in range(trailing_blanks_to_include):
                     line_end_idx = working_content.find(internal_newline, expanded_end)
-                    if line_end_idx == -1: # End of file
+                    if line_end_idx == -1:
                         if working_content[expanded_end:].strip() == "": expanded_end = len(working_content)
                         break
                     next_line = working_content[expanded_end:line_end_idx]
@@ -381,47 +294,49 @@ def apply_patch(
                     else: break
                 end_pos = expanded_end
 
+            def normalize_block(text): return "\n".join(line.strip() for line in text.strip().splitlines())
+            if action == 'REPLACE':
+                if normalize_block(working_content[start_pos:end_pos]) == normalize_block(content_to_add):
+                    debug_print(debug, "IDEMPOTENCY SKIP", message="REPLACE content already present."); continue
+            elif action == 'INSERT_AFTER':
+                if normalize_block(working_content[end_pos:]).startswith(normalize_block(content_to_add)):
+                     debug_print(debug, "IDEMPOTENCY SKIP", message="INSERT_AFTER content already present."); continue
+            elif action == 'INSERT_BEFORE':
+                if normalize_block(working_content[:start_pos]).endswith(normalize_block(content_to_add)):
+                    debug_print(debug, "IDEMPOTENCY SKIP", message="INSERT_BEFORE content already present."); continue
+
             if action == 'DELETE':
                 working_content = working_content[:start_pos] + working_content[end_pos:]
                 continue
 
             first_char_pos = start_pos
-            while first_char_pos < len(working_content) and working_content[first_char_pos].isspace():
-                first_char_pos += 1
+            while first_char_pos < len(working_content) and working_content[first_char_pos].isspace(): first_char_pos += 1
             line_start_idx = working_content.rfind(internal_newline, 0, first_char_pos) + 1
             indentation = working_content[line_start_idx:first_char_pos]
-
             indented_content = internal_newline.join(indentation + line for line in content_to_add.splitlines())
+            if indented_content and not indented_content.endswith(internal_newline): indented_content += internal_newline
 
-            before_block = working_content[:start_pos]
-            original_block = working_content[start_pos:end_pos]
-            after_block = working_content[end_pos:]
+            if action == 'REPLACE': working_content = working_content[:start_pos] + indented_content + working_content[end_pos:]
+            elif action == 'INSERT_AFTER': working_content = working_content[:end_pos] + indented_content + working_content[end_pos:]
+            elif action == 'INSERT_BEFORE': working_content = working_content[:start_pos] + indented_content + working_content[start_pos:]
 
-            # Ensure the new block ends with a newline to maintain structure.
-            if indented_content and not indented_content.endswith(internal_newline):
-                indented_content += internal_newline
+        final_content = newline_char.join([line.rstrip(' \t') for line in working_content.split(internal_newline)])
+        if final_content != original_content:
+            write_plan.append((file_path, final_content, relative_path))
 
-            if action == 'REPLACE':
-                working_content = before_block + indented_content + after_block
-            elif action == 'INSERT_AFTER':
-                working_content = before_block + original_block + indented_content + after_block
-            elif action == 'INSERT_BEFORE':
-                working_content = before_block + indented_content + original_block + after_block
-
-        # Post-processing: strip trailing whitespace from all lines.
-        lines = working_content.split(internal_newline)
-        stripped_lines = [line.rstrip(' \t') for line in lines]
-
-        # Convert line endings back to the original/specified format before writing.
-        final_content = newline_char.join(stripped_lines)
-
-        if not dry_run and final_content != original_content:
-            debug_print(debug, "WRITING FILE", path=file_path, content=final_content)
-            os.makedirs(os.path.dirname(file_path) or '.', exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8', newline='') as f:
-                f.write(final_content)
-        elif dry_run: debug_print(debug, "DRY RUN: SKIPPING WRITE")
-        else: debug_print(debug, "NO CHANGES: SKIPPING WRITE")
+    # --- PHASE 2: EXECUTE ALL PLANNED WRITES ---
+    if not dry_run:
+        for f_path, f_content, r_path in write_plan:
+            try:
+                debug_print(debug, "WRITING FILE", path=f_path, content_len=len(f_content))
+                os.makedirs(os.path.dirname(f_path) or '.', exist_ok=True)
+                with open(f_path, 'w', encoding='utf-8', newline='') as f: f.write(f_content)
+            except IOError as e:
+                return report_error({"status": "FAILED", "file_path": r_path, "error": {"code": "FILE_WRITE_ERROR", "message": str(e)}})
+    elif write_plan:
+         debug_print(debug, "DRY RUN: SKIPPING WRITE", num_files=len(write_plan))
+    else:
+         debug_print(debug, "NO CHANGES: SKIPPING WRITE")
 
     return {"status": "SUCCESS"}
 

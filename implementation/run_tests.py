@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, sys, shutil, tempfile, difflib, json, argparse
+import os, sys, shutil, tempfile, difflib, json, argparse, hashlib
 from ap import apply_patch
 
 TESTS = [
@@ -20,6 +20,7 @@ TESTS = [
     ("18_idempotency", "positive", None),
     ("19_idempotency_noop", "positive", None),
     ("20_error_path_traversal", "negative", "INVALID_FILE_PATH"),
+    ("21_error_atomic_failure", "negative", "SNIPPET_NOT_FOUND"),
 ]
 
 def get_paths(test_name):
@@ -40,14 +41,23 @@ def get_paths(test_name):
         "18_idempotency": "18_idempotency.py",
         "19_idempotency_noop": "19_idempotency_noop.py",
         "20_error_path_traversal": "dummy.txt",
+        "21_error_atomic_failure": ["21_atomic_src1.txt", "21_atomic_src2.txt"],
     }
-    src_filename = file_map.get(test_name)
-    if not src_filename:
+    src_filenames = file_map.get(test_name)
+    if not src_filenames:
         sys.exit(f"Unknown test name: {test_name}")
-    return os.path.join("src", src_filename), patch_file, os.path.join("expected", src_filename)
+
+    if isinstance(src_filenames, str):
+        src_filenames = [src_filenames]
+
+    src_paths = [os.path.join("src", fname) for fname in src_filenames]
+    primary_expected_path = os.path.join("expected", src_filenames[0])
+
+    return src_paths, patch_file, primary_expected_path
 
 def run_positive_test(test_name, debug=False):
-    src_file, patch_file, expected_file = get_paths(test_name)
+    src_files, patch_file, expected_file = get_paths(test_name)
+    src_file = src_files[0] # Positive tests operate on a single primary file
     test_dir = tempfile.mkdtemp()
     try:
         if debug: print(f"\n{'='*20} RUNNING POSITIVE TEST: {test_name} {'='*20}")
@@ -83,12 +93,18 @@ def run_positive_test(test_name, debug=False):
         shutil.rmtree(test_dir)
 
 def run_negative_test(test_name, expected_code, debug=False):
-    src_file, patch_file, _ = get_paths(test_name)
+    source_files, patch_file, _ = get_paths(test_name)
     test_dir = tempfile.mkdtemp()
     try:
         if debug: print(f"\n{'='*20} RUNNING NEGATIVE TEST: {test_name} {'='*20}")
-        if os.path.exists(src_file):
-            shutil.copy(src_file, os.path.join(test_dir, os.path.basename(src_file)))
+
+        initial_hashes = {}
+        for src_path in source_files:
+            if os.path.exists(src_path):
+                dest_path = os.path.join(test_dir, os.path.basename(src_path))
+                shutil.copy(src_path, dest_path)
+                with open(dest_path, 'rb') as f:
+                    initial_hashes[os.path.basename(src_path)] = hashlib.md5(f.read()).hexdigest()
 
         report = apply_patch(patch_file=patch_file, project_dir=test_dir, json_report=True, debug=debug)
 
@@ -99,6 +115,17 @@ def run_negative_test(test_name, expected_code, debug=False):
                   f"'{report.get('error', {}).get('code')}'.\n" + json.dumps(report, indent=2)); return False
         if expected_code == "SNIPPET_NOT_FOUND" and "fuzzy_matches" not in report.get("error", {}).get("context", {}):
             print(f"❌ FAILED: {test_name}. Expected 'fuzzy_matches' in error report."); return False
+
+        final_hashes = {}
+        for filename in initial_hashes.keys():
+            with open(os.path.join(test_dir, filename), 'rb') as f:
+                final_hashes[filename] = hashlib.md5(f.read()).hexdigest()
+
+        if initial_hashes != final_hashes:
+            print(f"❌ FAILED: {test_name}. Atomicity violated. Files were modified during a failed patch operation.")
+            print(f"  Initial hashes: {initial_hashes}")
+            print(f"  Final hashes:   {final_hashes}")
+            return False
 
         print(f"✅ PASSED: {test_name} (Correctly failed as expected)"); return True
     finally:

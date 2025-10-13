@@ -1,0 +1,14 @@
+version: "1.0"
+changes:
+  - file_path: "21_atomic_src1.txt"
+    modifications:
+      - action: REPLACE
+        target:
+          snippet: "Change this line."
+        content: "This line should be changed."
+  - file_path: "21_atomic_src2.txt"
+    modifications:
+      - action: REPLACE
+        target:
+          snippet: "This snippet does not exist."
+        content: "This change will fail."

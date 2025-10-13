@@ -150,6 +150,16 @@
 
 ## 3. Patcher Implementation Requirements
 
+### 3.0. Atomicity
+
+A Patcher MUST treat the application of an entire patch file as a
+single, atomic transaction. If any modification specified within the
+`changes` list cannot be successfully applied for any reason (e.g.,
+`snippet` not found, ambiguity, file not found for a non-`CREATE_FILE`
+action), the Patcher MUST abort the entire operation. It MUST NOT
+write any changes to any files on the filesystem. The target project
+directory MUST remain in its original state, as if the Patcher had
+never been run.
 ### 3.1. Idempotency
 
    A Patcher MUST apply modifications idempotently. Applying the same patch
@@ -234,10 +244,13 @@
        `snippet`. This allows for controlled removal of surrounding whitespace,
        especially when using the `DELETE` action.
 
-   - **Sequential Application**: Modifications within a single
-     `File Change` object MUST be applied sequentially in the order they
-     are defined. The output of one modification becomes the input for
-     the search phase of the next.
+   - **Sequential Application**: Within a single
+     `File Change` object, modifications MUST be processed sequentially
+     in the order they are defined. The state of the file content *after*
+     one modification has been calculated serves as the input for the
+     search phase of the next modification. This sequential processing
+     happens in memory before any files are written to disk, in
+     accordance with the atomicity requirement (see Section 3.0).
 
    - **Insertion Context Awareness**:
      When generating `INSERT_AFTER` or `INSERT_BEFORE` actions to insert code
