@@ -198,10 +198,12 @@
    their indentation or the blank lines between them, and it prevents
    ambiguous partial matches within a single line.
 
-   **Important:** A `snippet` must not start in the middle of a source code
-   line (whitespace characters do not count). In other words, the first
-   character of the snippet must be the first non-whitespace character of
-   the source file line.
+   **Important:** `snippet` lines must not start or end in the middle of a
+   source code line (whitespace characters do not count). In other words,
+   the first character of every snippet line must be the first non-whitespace
+   character of corresponding source file line and the last character
+   of every snippet line must be the last non-whitespace character of
+   corresponding source file line.
 
    3.  **Scoping**: If an `anchor` is provided, the Patcher MUST first
        locate its unique occurrence using the literal search strategy. The
