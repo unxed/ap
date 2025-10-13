@@ -311,11 +311,10 @@
 
    - **Anchor Selection**: To minimize the risk of formatting errors,
      an `anchor` SHOULD be as short as possible while still being
-     unique within the file. Often, the first line of a function
-     signature or class definition is a more robust anchor than the
-     entire multi-line signature. This reduces the surface area for
+     unique within the file. This reduces the surface area for
      character-level mistakes that an AI might make when reproducing
      complex indentation.
+
 ## 5. Complete Example
 
    Given a target file `src/calculator.py`:
