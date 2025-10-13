@@ -197,6 +197,9 @@
    must be the first non-whitespace character of corresponding source file
    line and the last character of every anchor or snippet line must be
    the last non-whitespace character of corresponding source file line.
+   Special attention should be payed to comments located at the ends of lines.
+   They are also considered part of the line, along with the whitespace
+   separating them from the code.
 
    3.  **Scoping**: If an `anchor` is provided, the Patcher MUST first
        locate its unique occurrence using the literal search strategy. The
