@@ -85,19 +85,27 @@ def find_target_in_content(
     search_space, offset, anchor_found = content, 0, None
     if anchor:
         debug_print(debug, "ANCHOR SEARCH", anchor=anchor)
-        try:
-            anchor_pos = content.index(anchor)
-            search_space, offset, anchor_found = content[anchor_pos:], anchor_pos, True
-            debug_print(debug, "ANCHOR FOUND", position=anchor_pos)
-        except ValueError:
+        anchor_occurrences = smart_find(content, anchor)
+
+        if not anchor_occurrences:
             debug_print(debug, "ANCHOR NOT FOUND")
             return None, {
                 "code": "ANCHOR_NOT_FOUND",
                 "message": "Anchor not found.",
-                "context": {
-                    "anchor": anchor
-                }
+                "context": {"anchor": anchor}
             }
+
+        if len(anchor_occurrences) > 1:
+            # An anchor must be unique to confidently scope the search.
+            return None, {
+                "code": "AMBIGUOUS_ANCHOR",
+                "message": f"Anchor found {len(anchor_occurrences)} times, must be unique.",
+                "context": {"anchor": anchor, "count": len(anchor_occurrences)}
+            }
+
+        anchor_pos = anchor_occurrences[0][0]
+        search_space, offset, anchor_found = content[anchor_pos:], anchor_pos, True
+        debug_print(debug, "ANCHOR FOUND", position=anchor_pos)
 
     debug_print(debug, "SNIPPET SEARCH", snippet=snippet, search_space_len=len(search_space))
     occurrences = smart_find(search_space, snippet)

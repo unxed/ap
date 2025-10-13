@@ -178,28 +178,18 @@
 
 ### 3.2. Search and Location Algorithm
 
-   A Patcher utility MUST follow these rules when locating a `target`. The
-   search strategies for `anchor` and `snippet` are intentionally different
-   to provide both precision and flexibility.
+   A Patcher utility MUST use a consistent, normalized search algorithm for
+   locating both an `anchor` and a `snippet`. This approach provides resilience
+   against non-semantic changes like indentation or spacing. The matching
+   process MUST follow these steps:
 
-   1.  **Anchor Search Strategy (Literal Match)**: An `anchor` MUST be
-       located using a direct, literal, character-by-character search. This
-       ensures the context is precisely and unambiguously identified. An AI
-       generating a patch MUST ensure the `anchor` text is an exact copy
-       from the source file, including all original whitespace and formatting.
-
-   2.  **Snippet Search Strategy (Normalized Match)**: A `snippet` SHOULD be
-       located using a "smart" or normalized search. The matching process MUST
-       follow these steps:
-       a. The `snippet` text is split into a list of lines.
-       b. Any line containing only whitespace is removed from this list.
-       c. Each remaining line has its leading and trailing whitespace removed.
-       d. The Patcher then searches the target file for a sequence of non-empty
-          lines that, after having their own leading/trailing whitespace
-          removed, are identical to the processed list of snippet lines.
-   This ensures that the match is based on the content of the lines, not
-   their indentation or the blank lines between them, and it prevents
-   ambiguous partial matches within a single line.
+   1.  The text to be found (`anchor` or `snippet`) is split into a list of lines.
+   2.  Any line containing only whitespace is removed from this list.
+   3.  Each remaining line has its leading and trailing whitespace removed.
+   4.  The Patcher then searches the target file (or the relevant scope) for a
+       sequence of non-empty lines that, after having their own
+       leading/trailing whitespace removed, are identical to the processed
+       list of lines from the text being sought.
 
    **Important:** `anchor` and `snippet` lines must not start or end
    in the middle of a source code line (whitespace characters do not count).
@@ -214,10 +204,12 @@
        only within the bounds of that `anchor`. If the `anchor` is not
        found, the Patcher MUST report an error.
 
-   4.  **Uniqueness**: The Patcher MUST find exactly one occurrence of the
-       `snippet` within its search scope (either the full file or the
-       `anchor`'s scope). If zero or more than one occurrences are found,
-       the Patcher MUST report an ambiguity error.
+   4.  **Uniqueness**: If an `anchor` is provided, the Patcher MUST find
+       exactly one occurrence of it within the file. Subsequently, the
+       Patcher MUST find exactly one occurrence of the `snippet` within its
+       search scope (the region starting from the beginning of the `anchor`).
+       If zero or more than one occurrences are found for either, the Patcher
+       MUST report an error.
 
 ### 3.3. Modification Logic
 
@@ -256,7 +248,7 @@
 
    - **Unique anchor**:
      During patch generation, the AI ​​must ensure that the selected anchor
-     appears only once in the source file, or choose a different anchor.   
+     appears only once in the source file, or choose a different anchor.
 
 ### 3.4. Error Handling
 
