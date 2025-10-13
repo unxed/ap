@@ -238,6 +238,16 @@
      are defined. The output of one modification becomes the input for
      the search phase of the next.
 
+   - **Insertion Context Awareness**:
+     When generating `INSERT_AFTER` or `INSERT_BEFORE` actions to insert code
+     inside a function, method, or block, an AI generating the patch MUST
+     ensure that inserted content does **not** appear between a declaration
+     or signature line and its opening brace or indentation block. Insertions
+     intended to go *inside* a function or block MUST use a `snippet` that
+     includes the opening `{` (in C-like languages) or the indented block start
+     (in indentation-based languages such as Python) or a similar construct in
+     other programming languages to guarantee syntactic correctness.
+
 ### 3.4. Error Handling
 
    The Patcher MUST provide clear, human-readable error messages for
@@ -260,7 +270,47 @@
    This step ensures code cleanliness, as AI-generated code patches often
    include extraneous whitespace.
 
-## 4. Complete Example
+## 4. Best Practices for AI Generation
+
+   To generate high-quality, seamless patches, an AI model MUST adhere
+   to the following best practices when authoring an `.ap` file:
+
+   - **Code Style Consistency**: Before generating `content`, the AI
+     MUST analyze the target file to infer and match its existing
+     code style. This includes, but is not limited to, conventions
+     such as indentation (tabs vs. spaces), naming conventions (e.g.,
+     `camelCase` vs. `snake_case`), brace style, maximum line length,
+     and quoting style (single vs. double quotes). The generated code
+     MUST be indistinguishable from the surrounding code.
+
+   - **Comment Language and Style**: The AI MUST match the natural
+     language of existing comments in the target file. For example,
+     if most of comments are in German, new comments must also be
+     in German. New code comments SHOULD only be added to clarify
+     complex or non-obvious logic; self-explanatory code SHOULD NOT
+     be commented.
+
+   - **Separation of Explanations**: Explanations about *why* the patch
+     is being made (the "intent" of the change) SHOULD be included as
+     YAML comments within the `.ap` file itself. These meta-comments
+     SHOULD NOT be inserted as code comments into the target file's
+     `content`. The language of these explanatory YAML comments
+     SHOULD match the language of the user's prompt.
+
+   - **Minimalism and Focus**: Patches SHOULD be minimal and focused on
+     the requested change. Refactoring unrelated code or making
+     stylistic changes outside the scope of the task can lead to
+     unexpected side effects and MUST be avoided unless explicitly
+     requested.
+
+   - **Anchor Selection**: To minimize the risk of formatting errors,
+     an `anchor` SHOULD be as short as possible while still being
+     unique within the file. Often, the first line of a function
+     signature or class definition is a more robust anchor than the
+     entire multi-line signature. This reduces the surface area for
+     character-level mistakes that an AI might make when reproducing
+     complex indentation.
+## 5. Complete Example
 
    Given a target file `src/calculator.py`:
 
@@ -320,7 +370,7 @@
        return a + b
    ```
 
-## 5. Security Considerations
+## 6. Security Considerations
 
    An `ap` patch file contains instructions to modify source code.
    Applying a patch from an untrusted source is equivalent to executing
@@ -330,7 +380,7 @@
    files MUST be treated with the same level of scrutiny as any other
    executable code and should only be applied from trusted sources.
 
-## 6. Rationale
+## 7. Rationale
 
    - **YAML over JSON**: YAML was chosen for its superior readability,
      native support for multi-line strings (via `|` and `>`), and ability
@@ -349,10 +399,3 @@
      statement inside a function), the `anchor` is crucial for providing
      unambiguous context.
 
-- **Best Practices for Anchor Generation**: To minimize the risk of formatting
-  errors during AI generation, an `anchor` SHOULD be as short as possible
-  while still being unique within the file. Often, the first line of a
-  function signature or class definition is a much more robust anchor than
-  the entire multi-line signature. This reduces the surface area for
-  character-level mistakes that AI models can make when reproducing complex
-  indentation.
