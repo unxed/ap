@@ -149,6 +149,7 @@ def apply_patch(
         if not json_report:
             print(f"\nERROR: {details['error']['message']}")
             ctx = details['error'].get('context', {})
+            if 'anchor' in ctx: print(f"---\nAnchor:\n{ctx['anchor']}\n---")
             if 'snippet' in ctx: print(f"---\nSnippet:\n{ctx['snippet']}\n---")
             if ctx.get('fuzzy_matches'):
                 print("Did you mean one of these?")
