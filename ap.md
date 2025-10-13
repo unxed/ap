@@ -250,6 +250,10 @@
      (in indentation-based languages such as Python) or a similar construct in
      other programming languages to guarantee syntactic correctness.
 
+   - **Unique anchor**:
+     During patch generation, the AI ​​must ensure that the selected anchor
+     appears only once in the source file, or choose a different anchor.   
+
 ### 3.4. Error Handling
 
    The Patcher MUST provide clear, human-readable error messages for
