@@ -101,6 +101,7 @@
      existing file or fall back to the OS default for new files.
      Allowed values are `"LF"`, `"CRLF"`, and `"CR"`. This is
      particularly useful for the `CREATE_FILE` action.
+
 ### 2.4. Modification Object
 
    Each item in the `modifications` list is a `Modification` object,
@@ -148,6 +149,7 @@
      consecutive blank lines immediately following the `snippet`.
 
 ## 3. Patcher Implementation Requirements
+
 ### 3.1. Idempotency
 
    A Patcher MUST apply modifications idempotently. Applying the same patch
@@ -173,6 +175,7 @@
      content is identical to the provided `content`, the operation MUST
      be skipped. If the file exists with different content, the Patcher
      SHOULD report an error to prevent overwriting an unrelated file.
+
 ### 3.2. Search and Location Algorithm
 
    A Patcher utility MUST follow these rules when locating a `target`. The
@@ -198,12 +201,12 @@
    their indentation or the blank lines between them, and it prevents
    ambiguous partial matches within a single line.
 
-   **Important:** `snippet` lines must not start or end in the middle of a
-   source code line (whitespace characters do not count). In other words,
-   the first character of every snippet line must be the first non-whitespace
-   character of corresponding source file line and the last character
-   of every snippet line must be the last non-whitespace character of
-   corresponding source file line.
+   **Important:** `anchor` and `snippet` lines must not start or end
+   in the middle of a source code line (whitespace characters do not count).
+   In other words, the first character of every anchor or snippet line
+   must be the first non-whitespace character of corresponding source file
+   line and the last character of every anchor or snippet line must be
+   the last non-whitespace character of corresponding source file line.
 
    3.  **Scoping**: If an `anchor` is provided, the Patcher MUST first
        locate its unique occurrence using the literal search strategy. The
@@ -215,6 +218,7 @@
        `snippet` within its search scope (either the full file or the
        `anchor`'s scope). If zero or more than one occurrences are found,
        the Patcher MUST report an ambiguity error.
+
 ### 3.3. Modification Logic
 
    - **Indentation**: When performing any action involving `content`
