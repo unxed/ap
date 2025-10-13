@@ -155,7 +155,8 @@ def apply_patch(
 ) -> Dict[str, Any]:
     def report_error(details):
         if not json_report:
-            print(f"\nERROR: {details['error']['message']}")
+            file_info = f" in file '{details.get('file_path')}'" if details.get('file_path') else ""
+            print(f"\nERROR{file_info}: {details['error']['message']}")
             ctx = details['error'].get('context', {})
             if 'anchor' in ctx: print(f"---\nAnchor:\n{ctx['anchor']}\n---")
             if 'snippet' in ctx: print(f"---\nSnippet:\n{ctx['snippet']}\n---")
