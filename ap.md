@@ -3,29 +3,22 @@
 
 ## Abstract
 
-   This document defines the 'ap' (AI-friendly Patch) format, a
-   declarative, human-readable specification for describing changes to
-   source code files. Traditional patch formats, based on line numbers
-   and textual context (e.g., diff/patch), are brittle and poorly
-   suited for generation by Large Language Models (LLMs). The 'ap'
-   format addresses this by using semantic anchors and unique code
-   snippets as locators, making it resilient to minor formatting changes
-   and more aligned with the conceptual way AI models process code.
-
-## Status of This Memo
-
-   This memo provides information for the AI and developer communities. It
-   does not specify an Internet standard of any kind. Distribution of
-   this memo is unlimited.
+   This document defines the 'ap' (AI-friendly Patch) format,
+   a declarative, human-readable specification for describing changes
+   to source code files.
+   
+   Traditional patch format, diff/patch, is too brittle for generation
+   by Large Language Models (LLMs). The 'ap' format addresses this by
+   using code fragments as locators, making it more aligned with the
+   conceptual way AI models process code and also resilient to minor
+   formatting changes.
 
 ## 1. Introduction
 
 ### 1.1. The Problem with Traditional Patches
 
-   For decades, developers have used formats like `diff` and `patch` to
-   represent and apply code changes. These formats are based on precise
-   line numbers and surrounding context lines. While effective for
-   version control systems that operate on byte-for-byte comparisons,
+   For decades, developers have used `diff`/`patch` format to represent
+   and apply code changes. While effective for byte-for-byte comparisons,
    they are highly fragile when used in workflows involving AI code
    generation.
 
@@ -56,10 +49,11 @@
      in the `ap` format. The RECOMMENDED file extension is `.ap`.
    - **Patcher**: A tool or utility that parses a Patch File and applies
      the specified modifications to a target source code tree.
-   - **Snippet**: A specific, multi-line string of code that the Patcher
-     MUST locate within a file.
-   - **Anchor**: An OPTIONAL, larger block of code that provides context
-     to narrow the search scope for a `Snippet`.
+   - **Snippet**: A line or block of code that the Patcher MUST locate
+     within a file. It SHOULD be unique within a file if no `anchor` is
+     specified.
+   - **Anchor**: An OPTIONAL line or block of code to narrow the search
+     scope for a `Snippet`.
 
 ## 2. Format Specification
 
@@ -87,20 +81,19 @@
    mapping containing the following keys:
 
    - `file_path` (string, REQUIRED): The path to the target file,
-     relative to the root of the project directory. For security, this
+     relative to the `ap` patch file location. For security, this
      path MUST NOT contain components that traverse parent directories
      (e.g., `..`). This ensures the Patcher only operates within
-     the specified project directory.
+     the specified directory.
 
    - `modifications` (list, REQUIRED): A list of `Modification` objects
      to be applied sequentially to this file.
 
    - `newline` (string, OPTIONAL): Specifies the desired line ending
-     format for the file. If provided, this value MUST be used. If
-     omitted, the Patcher will attempt to detect the format from an
-     existing file or fall back to the OS default for new files.
-     Allowed values are `"LF"`, `"CRLF"`, and `"CR"`. This is
-     particularly useful for the `CREATE_FILE` action.
+     format for the file for the `CREATE_FILE` action. If provided,
+     this value MUST be used. If omitted, the Patcher SHOULD fall back
+     to the OS default for new files.
+     Allowed values are `"LF"`, `"CRLF"`, and `"CR"`.
 
 ### 2.4. Modification Object
 
@@ -114,7 +107,8 @@
      - `INSERT_AFTER`: Insert the `content` immediately after the `Snippet`.
      - `INSERT_BEFORE`: Insert the `content` immediately before the `Snippet`.
      - `DELETE`: Remove the `Snippet` from the file.
-     - `CREATE_FILE`: Create a new file at `file_path` with the specified `content`.
+     - `CREATE_FILE`: Create a new file at `file_path` with the specified
+       `content`.
 
    - `target` (mapping, CONDITIONALLY REQUIRED): A `Target` object that
      specifies where to apply the modification. This field MUST be
@@ -132,15 +126,12 @@
    The `target` object is a mapping used to locate the code to be
    modified. It contains the following keys:
 
-   - `snippet` (string, REQUIRED): A verbatim, potentially multi-line
-     string of code to be located within the file. This is the primary
+   - `snippet` (string, REQUIRED): A string of code (potentially
+     multi-line) to be located within the file. This is the primary
      locator.
-   - `anchor` (string, OPTIONAL): A larger, stable block of code (e.g., a
-     full function or class definition) that contains the `snippet`. Its
-     content MUST be a verbatim, character-for-character match of the code
-     in the target file, including all whitespace and indentation. If
-     provided, the Patcher MUST confine its search for the `snippet` to
-     the scope of the `anchor`. This is used to resolve ambiguity.
+   - `anchor` (string, OPTIONAL): A string of code (potentially
+     multi-line) to start search of `snippet` from. This is used
+     to resolve ambiguity.
    - `include_leading_blank_lines` (integer, OPTIONAL): When specified, the
      Patcher's selection is expanded to include up to this number of
      consecutive blank lines immediately preceding the `snippet`.
@@ -152,14 +143,15 @@
 
 ### 3.0. Atomicity
 
-A Patcher MUST treat the application of an entire patch file as a
-single, atomic transaction. If any modification specified within the
-`changes` list cannot be successfully applied for any reason (e.g.,
-`snippet` not found, ambiguity, file not found for a non-`CREATE_FILE`
-action), the Patcher MUST abort the entire operation. It MUST NOT
-write any changes to any files on the filesystem. The target project
-directory MUST remain in its original state, as if the Patcher had
-never been run.
+   A Patcher MUST treat the application of an entire patch file as a
+   single, atomic transaction. If any modification specified within the
+   `changes` list cannot be successfully applied for any reason (e.g.,
+   `snippet` not found, ambiguity, file not found for a non-`CREATE_FILE`
+   action), the Patcher MUST abort the entire operation. It MUST NOT
+   write any changes to any files on the filesystem. The target project
+   directory MUST remain in its original state, as if the Patcher had
+   never been run.
+
 ### 3.1. Idempotency
 
    A Patcher MUST apply modifications idempotently. Applying the same patch
@@ -184,50 +176,62 @@ never been run.
    - **`CREATE_FILE`**: If a file at `file_path` already exists and its
      content is identical to the provided `content`, the operation MUST
      be skipped. If the file exists with different content, the Patcher
-     SHOULD report an error to prevent overwriting an unrelated file.
+     MUST report an error to prevent overwriting an unrelated file.
 
 ### 3.2. Search and Location Algorithm
 
-   A Patcher utility MUST use a consistent, normalized search algorithm for
-   locating both an `anchor` and a `snippet`. This approach provides resilience
-   against non-semantic changes like indentation or spacing. The matching
-   process MUST follow these steps:
+   A Patcher utility MUST use a consistent, normalized search algorithm
+   for locating both an `anchor` and a `snippet`. This approach provides
+   resilience against non-semantic changes like indentation or spacing.
+   The matching process MUST follow these steps:
 
-   1.  The text to be found (`anchor` or `snippet`) is split into a list of lines.
+   1.  The text to be found (`anchor` or `snippet`) is split into a list
+       of lines.
    2.  Any line containing only whitespace is removed from this list.
    3.  Each remaining line has its leading and trailing whitespace removed.
-   4.  The Patcher then searches the target file (or the relevant scope) for a
-       sequence of non-empty lines that, after having their own
+   4.  The Patcher then searches the target file (or the relevant scope) for
+       a sequence of non-empty lines that, after having their own
        leading/trailing whitespace removed, are identical to the processed
        list of lines from the text being sought.
 
-   **Important:** `anchor` and `snippet` lines must not start or end
-   in the middle of a source code line (whitespace characters do not count).
+   **Important:** `anchor` and `snippet` must not start or end in the middle
+   of a source code line (leading whitespace characters do not count).
    In other words, the first character of every anchor or snippet line
    must be the first non-whitespace character of corresponding source file
    line and the last character of every anchor or snippet line must be
    the last non-whitespace character of corresponding source file line.
-   Special attention should be payed to comments located at the ends of lines.
-   They are also considered part of the line, along with the whitespace
-   separating them from the code.
+   Special attention should be payed to comments located at the ends
+   of lines. They are also considered part of the line, along with the
+   whitespace separating them from the code.
 
    3.  **Scoping**: If an `anchor` is provided, the Patcher MUST first
-       locate its unique occurrence using the literal search strategy. The
-       subsequent normalized search for the `snippet` MUST be performed
-       only within the bounds of that `anchor`. If the `anchor` is not
-       found, the Patcher MUST report an error.
+       locate its unique occurrence using the normalized search strategy.
+       The subsequent normalized search for the `snippet` MUST be performed
+       only starting from that `anchor`. If the `anchor` is not found,
+       the Patcher MUST report an error.
 
-   4.  **Uniqueness**: If an `anchor` is provided, the Patcher MUST find
-       exactly one occurrence of it within the file. Subsequently, the
-       Patcher MUST find exactly one occurrence of the `snippet` within its
-       search scope (the region starting from the beginning of the `anchor`).
-       If zero or more than one occurrences are found for either, the Patcher
-       MUST report an error.
+   4.  **Uniqueness and Precedence**:
+       - **Anchor**: If an `anchor` is provided, the Patcher MUST find
+         exactly one occurrence of it within the file. If zero or more
+         than one occurrences are found, the Patcher MUST report an
+         error.
+       - **Snippet**:
+         - If an `anchor` is provided, the Patcher's search for the
+           `snippet` begins from the start of the located `anchor`.
+           To be precise, the search scope for the snippet MUST begin
+           at the first line of the located anchor and extend to the end
+           of the file. The Patcher MUST use the *first* occurrence found
+           within this scope. If zero occurrences are found, it MUST
+           report an error.
+         - If no `anchor` is provided, the Patcher MUST find exactly
+           one occurrence of the `snippet` within the entire file. If
+           zero or more than one occurrences are found, it MUST report
+           an error.
 
 ### 3.3. Modification Logic
 
    - **Indentation**: When performing any action involving `content`
-     (`REPLACE`, `INSERT_AFTER`, `INSERT_BEFORE`), the Patcher SHOULD
+     (`REPLACE`, `INSERT_AFTER`, `INSERT_BEFORE`), the Patcher MUST
      determine the indentation of the first line of the original `snippet`
      and apply that same indentation to every line of the new `content`.
 
@@ -237,20 +241,14 @@ never been run.
      specified number of consecutive blank lines before or after the located
      `snippet`. This allows for controlled removal of surrounding whitespace,
      especially when using the `DELETE` action.
-     - **Blank Line Inclusion**: If `include_leading_blank_lines` or
-       `include_trailing_blank_lines` are specified in the `target`, the
-       Patcher MUST expand the region to be modified to include the
-       specified number of consecutive blank lines before or after the located
-       `snippet`. This allows for controlled removal of surrounding whitespace,
-       especially when using the `DELETE` action.
 
-   - **Sequential Application**: Within a single
-     `File Change` object, modifications MUST be processed sequentially
-     in the order they are defined. The state of the file content *after*
-     one modification has been calculated serves as the input for the
-     search phase of the next modification. This sequential processing
-     happens in memory before any files are written to disk, in
-     accordance with the atomicity requirement (see Section 3.0).
+   - **Sequential Application**: Within a single `File Change` object,
+     modifications MUST be processed sequentially in the order they are
+     defined. The state of the file content *after* one modification
+     has been calculated serves as the input for the search phase of the next
+     modification. This sequential processing happens in memory before any
+     files are written to disk, in accordance with the atomicity requirement
+     (see Section 3.0).
 
    - **Insertion Context Awareness**:
      When generating `INSERT_AFTER` or `INSERT_BEFORE` actions to insert code
@@ -263,7 +261,7 @@ never been run.
      other programming languages to guarantee syntactic correctness.
 
    - **Unique anchor**:
-     During patch generation, the AI ​​must ensure that the selected anchor
+     During patch generation, the AI must ensure that the selected anchor
      appears only once in the source file, or choose a different anchor.
 
 ### 3.4. Error Handling
@@ -289,6 +287,13 @@ never been run.
    include extraneous whitespace.
 
 ## 4. Best Practices for AI Generation
+
+   A highly effective mental model for generating `ap` patches is to imagine
+   giving instructions to a junior developer. The patch should be clear,
+   unambiguous, and use the smallest possible context (`snippet` and `anchor`)
+   to uniquely identify the code that needs changing. This approach naturally
+   leads to robust, high-quality patches that are easy for both humans and
+   machines to understand.
 
    To generate high-quality, seamless patches, an AI model MUST adhere
    to the following best practices when authoring an `.ap` file:
@@ -321,11 +326,24 @@ never been run.
      unexpected side effects and MUST be avoided unless explicitly
      requested.
 
-   - **Anchor Selection**: To minimize the risk of formatting errors,
-     an `anchor` SHOULD be as short as possible while still being
-     unique within the file. This reduces the surface area for
-     character-level mistakes that an AI might make when reproducing
-     complex indentation.
+   - **Locator Selection Strategy (`anchor`, `snippet`)**:
+     To create robust and minimal patches, an AI model MUST follow a specific
+     hierarchical strategy for selecting locators. The goal is to use the
+     simplest possible method to uniquely and reliably identify the target code.
+     The model MUST follow these steps in order:
+
+     1.  **Identify Minimal `snippet`**: First, select the shortest possible
+         `snippet` of code that is likely to be unique.
+
+     2.  **Test for Uniqueness (File Scope)**: The AI MUST mentally check if
+         this `snippet` is unique within the entire target file. If unique,
+         the selection is complete. Use only the `snippet`. DO NOT add an
+         `anchor` if it is not needed. If not unique, proceed to the next step.
+
+     3.  **Define a Scoping `anchor`**: If the `snippet` is not unique,
+         identify the smallest, most stable preceding semantic block of code
+         (like a function/method signature) to serve as an `anchor`. The
+         `anchor` MUST be unique within the file.
 
 ## 5. Complete Example
 
@@ -413,6 +431,5 @@ never been run.
      `snippet`) provides a balance between conciseness and robustness. For
      globally unique changes (like adding an import), a `snippet` is
      sufficient. For changes inside common structures (like a return
-     statement inside a function), the `anchor` is crucial for providing
-     unambiguous context.
+     statement inside a function), the `anchor` is crucial.
 

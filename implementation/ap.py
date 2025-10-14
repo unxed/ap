@@ -89,61 +89,33 @@ def find_target_in_content(
 
         if not anchor_occurrences:
             debug_print(debug, "ANCHOR NOT FOUND")
-            return None, {
-                "code": "ANCHOR_NOT_FOUND",
-                "message": "Anchor not found.",
-                "context": {"anchor": anchor}
-            }
+            return None, {"code": "ANCHOR_NOT_FOUND", "message": "Anchor not found.", "context": {"anchor": anchor}}
 
         if len(anchor_occurrences) > 1:
-            # An anchor must be unique to confidently scope the search.
             return None, {
                 "code": "AMBIGUOUS_ANCHOR",
                 "message": f"Anchor found {len(anchor_occurrences)} times, must be unique.",
-                "context": {"anchor": anchor, "count": len(anchor_occurrences)}
-            }
+                "context": {"anchor": anchor, "count": len(anchor_occurrences)}}
 
-        anchor_pos = anchor_occurrences[0][0]
-        search_space, offset, anchor_found = content[anchor_pos:], anchor_pos, True
-        debug_print(debug, "ANCHOR FOUND", position=anchor_pos)
+        anchor_start, anchor_end = anchor_occurrences[0]
+        search_space, offset, anchor_found = content[anchor_start:], anchor_start, True
+        debug_print(debug, "ANCHOR FOUND", position=anchor_start)
 
     debug_print(debug, "SNIPPET SEARCH", snippet=snippet, search_space_len=len(search_space))
     occurrences = smart_find(search_space, snippet)
-
-    # Heuristic: If an anchor is used, we assume the first match is the correct one.
-    # This resolves ambiguities within a specific function or class.
-    if anchor and len(occurrences) > 1:
-        debug_print(
-            debug, "AMBIGUITY HEURISTIC",
-            message="Anchor present, taking first match.", all_occurrences=occurrences
-        )
-        occurrences = occurrences[:1]
-
-    debug_print(debug, "SNIPPET SEARCH RESULT", num_occurrences=len(occurrences), occurrences=occurrences)
+    debug_print(debug, "SNIPPET SEARCH RESULT", num_found=len(occurrences))
 
     if not occurrences:
-        context = {
-            "snippet": snippet,
-            "anchor": anchor,
-            "anchor_found": anchor_found,
-            "fuzzy_matches": get_fuzzy_matches(search_space, snippet)
-        }
-        return None, {
-            "code": "SNIPPET_NOT_FOUND",
-            "message": "Snippet not found.",
-            "context": context
-        }
-    if len(occurrences) > 1:
-        context = {
-            "snippet": snippet,
-            "anchor": anchor,
-            "anchor_found": anchor_found,
-            "count": len(occurrences)
-        }
+        context = {"snippet": snippet, "anchor": anchor, "anchor_found": anchor_found}
+        context["fuzzy_matches"] = get_fuzzy_matches(search_space, snippet)
+        message, code = "Snippet not found.", "SNIPPET_NOT_FOUND"
+        return None, {"code": code, "message": message, "context": context}
+
+    if len(occurrences) > 1 and not anchor:
         return None, {
             "code": "AMBIGUOUS_MATCH",
-            "message": f"Snippet found {len(occurrences)} times.",
-            "context": context
+            "message": f"Snippet found {len(occurrences)} times. Use an 'anchor' to disambiguate.",
+            "context": {"snippet": snippet, "anchor": anchor, "count": len(occurrences)}
         }
 
     start_pos, end_pos = occurrences[0]
