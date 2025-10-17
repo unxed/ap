@@ -30,6 +30,8 @@ To better understand the purpose of `ap`, it's equally important to understand w
 
 *   **A diffing tool.** There are no plans for an `ap diff` utility that would create a patch by comparing two files. `ap` patches are designed to be *generated* by an AI, not *computed* by a diffing algorithm.
 
+*   **A format for reversible patches.** There is no --revert option and none is planned: the format itselft does not contain enough information to implement it. When using it, all the work of version control and rollback of changes should be delegated to version control systems.
+
 *   **A replacement for your favorite editor's AI plugin or console AI client.** On the contrary, `ap` can make these tools even more powerful.
 
 *   **An efficient tool for modifying highly repetitive data.** The reliance on unique snippets makes `ap` poorly suited for tasks like modifying the 20th identical entry in a large array initialization. Since the `snippet` would match every entry, it would create an ambiguity error. You would likely need to replace the entire block, whereas a line-number-based tool or a simple script would be more effective.
