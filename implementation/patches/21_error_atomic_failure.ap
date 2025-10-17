@@ -1,14 +1,23 @@
-version: "1.0"
+# Summary: Tests the atomicity guarantee: if any part of a patch fails, no files are modified.
+#
+# Plan:
+#   1. Define a valid change for `21_atomic_src1.txt`.
+#   2. Define an invalid change (snippet not found) for `21_atomic_src2.txt`.
+#      The entire operation must fail, and `21_atomic_src1.txt` must remain untouched.
+#
+version: "2.0"
 changes:
   - file_path: "21_atomic_src1.txt"
     modifications:
       - action: REPLACE
-        target:
-          snippet: "Change this line."
-        content: "This line should be changed."
+        snippet: |
+          Change this line.
+        content: |
+          This line should be changed.
   - file_path: "21_atomic_src2.txt"
     modifications:
       - action: REPLACE
-        target:
-          snippet: "This snippet does not exist."
-        content: "This change will fail."
+        snippet: |
+          This snippet does not exist.
+        content: |
+          This change will fail.

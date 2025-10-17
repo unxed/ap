@@ -98,8 +98,8 @@ def find_target_in_content(
                 "context": {"anchor": anchor, "count": len(anchor_occurrences)}}
 
         anchor_start, anchor_end = anchor_occurrences[0]
-        search_space, offset, anchor_found = content[anchor_start:], anchor_start, True
-        debug_print(debug, "ANCHOR FOUND", position=anchor_start)
+        search_space, offset, anchor_found = content[anchor_end:], anchor_end, True
+        debug_print(debug, "ANCHOR FOUND", position=anchor_start, search_offset=offset)
 
     debug_print(debug, "SNIPPET SEARCH", snippet=snippet, search_space_len=len(search_space))
     occurrences = smart_find(search_space, snippet)
@@ -212,26 +212,38 @@ def apply_patch(
                 working_content = content_to_add.replace('\r\n', internal_newline).replace('\r', internal_newline)
                 break
 
-            target = mod.get('target', {}); snippet = target.get('snippet', '')
-            if not snippet:
-                return report_error({
-                    "status": "FAILED",
-                    "file_path": relative_path,
-                    "mod_idx": mod_idx,
-                    "error": {
-                        "code": "INVALID_MODIFICATION",
-                        "message": f"'snippet' is required for action '{action}'."
-                    }
-                })
+            snippet = mod.get('snippet')
+            start_snippet, end_snippet = mod.get('start_snippet'), mod.get('end_snippet')
+            target_pos, error = None, {}
 
-            target_pos, error = find_target_in_content(working_content, target.get('anchor'), snippet, debug)
+            if snippet is not None:
+                if start_snippet is not None or end_snippet is not None:
+                    return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Cannot use 'snippet' with 'start_snippet' or 'end_snippet'."}})
+                target_pos, error = find_target_in_content(working_content, mod.get('anchor'), snippet, debug)
+            elif start_snippet is not None and end_snippet is not None:
+                if action not in ['REPLACE', 'DELETE']:
+                    return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range-based modification."}})
+
+                start_pos_info, error = find_target_in_content(working_content, mod.get('anchor'), start_snippet, debug)
+                if not error:
+                    start_range_begin, start_range_end = start_pos_info
+                    end_occurrences = smart_find(working_content[start_range_end:], end_snippet)
+                    if not end_occurrences:
+                        error = {"code": "END_SNIPPET_NOT_FOUND", "message": "End snippet not found after start snippet.", "context": {"start_snippet": start_snippet, "end_snippet": end_snippet}}
+                    else:
+                        end_range_begin_rel, end_range_end_rel = end_occurrences[0]
+                        final_start_pos = start_range_begin
+                        final_end_pos = start_range_end + end_range_end_rel
+                        target_pos = (final_start_pos, final_end_pos)
+            else:
+                return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Modification must contain either 'snippet' or both 'start_snippet' and 'end_snippet'."}})
 
             if error and error.get('code') == 'SNIPPET_NOT_FOUND':
                 if action == 'DELETE':
                     debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet to delete is already gone.", snippet=snippet)
                     continue
                 if action == 'REPLACE':
-                    content_pos, _ = find_target_in_content(working_content, target.get('anchor'), content_to_add, debug=False)
+                    content_pos, _ = find_target_in_content(working_content, mod.get('anchor'), content_to_add, debug=False)
                     if content_pos:
                         debug_print(debug, "IDEMPOTENCY SKIP", message="REPLACE snippet not found, but replacement content exists.", snippet=snippet)
                         continue
@@ -241,7 +253,7 @@ def apply_patch(
                 return report_error(report)
 
             start_pos, end_pos = target_pos
-            leading_blanks_to_include = target.get('include_leading_blank_lines', 0)
+            leading_blanks_to_include = mod.get('include_leading_blank_lines', 0)
             if leading_blanks_to_include > 0:
                 expanded_start = start_pos
                 for _ in range(leading_blanks_to_include):
@@ -253,7 +265,7 @@ def apply_patch(
                     if prev_line.strip() == "": expanded_start = line_start_idx + 1
                     else: break
                 start_pos = expanded_start
-            trailing_blanks_to_include = target.get('include_trailing_blank_lines', 0)
+            trailing_blanks_to_include = mod.get('include_trailing_blank_lines', 0)
             if trailing_blanks_to_include > 0:
                 expanded_end = end_pos
                 for _ in range(trailing_blanks_to_include):
@@ -288,9 +300,12 @@ def apply_patch(
             indented_content = internal_newline.join(indentation + line for line in content_to_add.splitlines())
             if indented_content and not indented_content.endswith(internal_newline): indented_content += internal_newline
 
-            if action == 'REPLACE': working_content = working_content[:start_pos] + indented_content + working_content[end_pos:]
-            elif action == 'INSERT_AFTER': working_content = working_content[:end_pos] + indented_content + working_content[end_pos:]
-            elif action == 'INSERT_BEFORE': working_content = working_content[:start_pos] + indented_content + working_content[start_pos:]
+            if action == 'REPLACE':
+                working_content = working_content[:start_pos] + indented_content + working_content[end_pos:]
+            elif action == 'INSERT_AFTER':
+                working_content = working_content[:end_pos] + indented_content + working_content[end_pos:]
+            elif action == 'INSERT_BEFORE':
+                working_content = working_content[:start_pos] + indented_content + working_content[start_pos:]
 
         final_content = newline_char.join([line.rstrip(' \t') for line in working_content.split(internal_newline)])
         if final_content != original_content:

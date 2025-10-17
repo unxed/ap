@@ -1,8 +1,15 @@
-version: "1.0"
+# Summary: Tests that the patcher fails correctly when the target source file does not exist.
+#
+# Plan:
+#   1. Attempt to modify a file named `non_existent_file.txt`.
+#      The patch should fail with a FILE_NOT_FOUND error.
+#
+version: "2.0"
 changes:
   - file_path: "non_existent_file.txt"
     modifications:
       - action: REPLACE
-        target:
-          snippet: "some text"
-        content: "new text"
+        snippet: |
+          some text
+        content: |
+          new text

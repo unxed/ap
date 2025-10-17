@@ -1,4 +1,9 @@
-version: "1.0"
+# Summary: Tests the `CREATE_FILE` action.
+#
+# Plan:
+#   1. Create a new file at `new/created_file.txt` with specified content and CRLF line endings.
+#
+version: "2.0"
 changes:
   - file_path: "new/created_file.txt"
     newline: CRLF

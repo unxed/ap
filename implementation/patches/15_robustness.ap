@@ -1,13 +1,22 @@
-version: "1.0"
+# Summary: Tests robustness with special characters in comments and correct anchor scoping.
+#
+# Plan:
+#   1. In `15_robustness.js`, replace a `setting` line only within the `unsafeConfig` block.
+#   2. Replace a comment containing special YAML characters.
+#
+version: "2.0"
 changes:
   - file_path: "15_robustness.js"
     modifications:
       - action: REPLACE
-        target:
-          anchor: "const unsafeConfig = {"
-          snippet: 'setting: "default" // This one SHOULD be changed'
-        content: 'setting: "overridden" // Changed safely within anchor'
+        anchor: |
+          const unsafeConfig = {
+        snippet: |
+          setting: "default" // This one SHOULD be changed
+        content: |
+          setting: "overridden" // Changed safely within anchor
       - action: REPLACE
-        target:
-          snippet: "// Special chars: &*{}[]"
-        content: "// All special characters handled correctly"
+        snippet: |
+          // Special chars: &*{}[]
+        content: |
+          // All special characters handled correctly

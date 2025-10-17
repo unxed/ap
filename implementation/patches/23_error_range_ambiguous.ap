@@ -1,0 +1,15 @@
+# Summary: Tests that a range-based action fails if the start_snippet is ambiguous.
+#
+# Plan:
+#   1. Attempt to delete a block using a `start_snippet` that appears twice.
+#      The patcher should fail with an AMBIGUOUS_MATCH error.
+#
+version: "2.0"
+changes:
+  - file_path: "23_error_range_ambiguous.py"
+    modifications:
+      - action: DELETE
+        start_snippet: |
+          # AMBIGUOUS START
+        end_snippet: |
+          # AMBIGUOUS END

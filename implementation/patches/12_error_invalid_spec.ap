@@ -1,7 +1,14 @@
-version: "1.0"
+# Summary: Tests that the patcher fails when a modification is missing a required field (e.g., `action`).
+#
+# Plan:
+#   1. The patch file is missing the required `action` key in its modification.
+#      The patch should fail with an INVALID_MODIFICATION error.
+#
+version: "2.0"
 changes:
   - file_path: "dummy.txt"
     modifications:
-      - target:
-          snippet: "dummy"
-        content: "new content"
+      - snippet: |
+          dummy
+        content: |
+          new content

@@ -43,7 +43,6 @@ To better understand the purpose of `ap`, it's equally important to understand w
 Let's say you have a file `greeter.py`:
 
 ```python
-# greeter.py
 def say_hello():
     # This is the line we want to change
     print("Hello, world!")
@@ -56,15 +55,21 @@ And you want the AI to change the greeting.
 You attach the .ap format spec (`ap.md` from this repository) to your prompt, and ask the AI ​​to give an answer in .ap format. So instead of generating the whole modified file, AI generates only small patch, lets call it `afix.ap` (this name is convenient in practice, as it places the file at the beginning of the list of files in the folder):
 
 ```yaml
-# afix.ap
-version: "1.0"
+# Summary: Update the greeting message in greeter.py.
+#
+# Plan:
+#   1. In `greeter.py`, replace the "Hello, world!" string with
+#      "Hello, AI-powered world!".
+#
+version: "2.0"
 changes:
   - file_path: "greeter.py"
     modifications:
       - action: REPLACE
-        target:
-          snippet: 'print("Hello, world!")'
-        content: 'print("Hello, AI-powered world!")'
+        snippet: |
+          print("Hello, world!")
+        content: |
+          print("Hello, AI-powered world!")
 ```
 
 ### Applying the Patch
@@ -79,7 +84,6 @@ python3 ap.py --patch afix.ap
 Your `greeter.py` file should be automatically updated:
 
 ```python
-# greeter.py
 def say_hello():
     # This is the line we want to change
     print("Hello, AI-powered world!")
