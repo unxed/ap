@@ -329,7 +329,54 @@
    provides valuable context for human reviewers and serves as a clear guide
    for the AI itself.
 
-### 4.2. General Best Practices
+### 4.2. Locator Selection Strategy
+
+To create robust and minimal patches, an AI model MUST follow a specific
+hierarchical strategy for selecting locators. The choice between a single
+`snippet` and a `start_snippet`/`end_snippet` pair is the first and most
+critical step.
+
+1.  **Assess the Nature of the Change**: First, the AI must determine if the
+    modification is a "point change" or a "range change".
+    -   A **point change** involves a single line or a very short, atomic block
+        (typically 1-2 lines). All `INSERT_AFTER` and `INSERT_BEFORE`
+        actions are by definition point changes.
+    -   A **range change** involves deleting or replacing a larger block of
+        code (three or more lines), especially if the content is complex or
+        contains empty lines, making it prone to transcription errors.
+
+2.  **Choose the Locator Type Based on the Change**:
+    -   For a **range change** (`REPLACE` or `DELETE`), the AI SHOULD use the
+        `start_snippet`/`end_snippet` pair. This is the preferred method for
+        multi-line blocks.
+    -   For a **point change** (`REPLACE`, `DELETE`, `INSERT_AFTER`,
+        `INSERT_BEFORE`), the AI MUST use a single `snippet`.
+
+3.  **Select the Snippet(s) and Anchor (if needed)**: After choosing the
+    locator type, the AI proceeds to select the content for the fields:
+    -   **For a `snippet`**:
+        1.  Identify the shortest possible `snippet` of code that is likely
+            to be unique.
+        2.  Test for Uniqueness (File Scope): The AI MUST mentally check if
+            this `snippet` is unique within the entire target file.
+        3.  If unique, the selection is complete. Use only the `snippet`. DO
+            NOT add an `anchor` if it is not needed.
+        4.  If not unique, identify the smallest, most stable preceding
+            semantic block (like a function/method signature) to serve as
+            an `anchor`. The `anchor` MUST be unique within the file.
+    -   **For a `start_snippet`/`end_snippet` pair**:
+        1.  Identify a `start_snippet` that is short, stable, and likely
+            to be unique within its context.
+        2.  Identify the first corresponding `end_snippet` that appears
+            after the start snippet. This snippet should also be as short
+            and stable as possible.
+        3.  Test the `start_snippet` for uniqueness using the same logic as
+            a single `snippet` (steps 2-4 above), adding an `anchor` if
+            necessary to disambiguate it. The `end_snippet` does not need
+            to be unique on its own; only its position relative to the
+            `start_snippet` matters.
+
+### 4.3. General Best Practices
 
    - **Structured Comment**: The patch file SHOULD begin with a commented-out
      `Summary` describing the overall goal, followed by a `Plan` with a
@@ -396,53 +443,6 @@
          def new_function():
              return True  # <-- Correctly indented, consistent with the block's first line
      ```
-
-### 4.3. Locator Selection Strategy
-
-To create robust and minimal patches, an AI model MUST follow a specific
-hierarchical strategy for selecting locators. The choice between a single
-`snippet` and a `start_snippet`/`end_snippet` pair is the first and most
-critical step.
-
-1.  **Assess the Nature of the Change**: First, the AI must determine if the
-    modification is a "point change" or a "range change".
-    -   A **point change** involves a single line or a very short, atomic block
-        (typically 1-2 lines). All `INSERT_AFTER` and `INSERT_BEFORE`
-        actions are by definition point changes.
-    -   A **range change** involves deleting or replacing a larger block of
-        code (three or more lines), especially if the content is complex or
-        contains empty lines, making it prone to transcription errors.
-
-2.  **Choose the Locator Type Based on the Change**:
-    -   For a **range change** (`REPLACE` or `DELETE`), the AI SHOULD use the
-        `start_snippet`/`end_snippet` pair. This is the preferred method for
-        multi-line blocks.
-    -   For a **point change** (`REPLACE`, `DELETE`, `INSERT_AFTER`,
-        `INSERT_BEFORE`), the AI MUST use a single `snippet`.
-
-3.  **Select the Snippet(s) and Anchor (if needed)**: After choosing the
-    locator type, the AI proceeds to select the content for the fields:
-    -   **For a `snippet`**:
-        1.  Identify the shortest possible `snippet` of code that is likely
-            to be unique.
-        2.  Test for Uniqueness (File Scope): The AI MUST mentally check if
-            this `snippet` is unique within the entire target file.
-        3.  If unique, the selection is complete. Use only the `snippet`. DO
-            NOT add an `anchor` if it is not needed.
-        4.  If not unique, identify the smallest, most stable preceding
-            semantic block (like a function/method signature) to serve as
-            an `anchor`. The `anchor` MUST be unique within the file.
-    -   **For a `start_snippet`/`end_snippet` pair**:
-        1.  Identify a `start_snippet` that is short, stable, and likely
-            to be unique within its context.
-        2.  Identify the first corresponding `end_snippet` that appears
-            after the start snippet. This snippet should also be as short
-            and stable as possible.
-        3.  Test the `start_snippet` for uniqueness using the same logic as
-            a single `snippet` (steps 2-4 above), adding an `anchor` if
-            necessary to disambiguate it. The `end_snippet` does not need
-            to be unique on its own; only its position relative to the
-            `start_snippet` matters.
 
 ## 5. Complete Example
 
