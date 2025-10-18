@@ -391,7 +391,8 @@ critical step.
         1.  Identify a `start_snippet` that is short, stable, and likely
             to be unique within its context.
         2.  Identify the first corresponding `end_snippet` that appears
-            after the start snippet.
+            after the start snippet. This snippet should also be as short
+            and stable as possible.
         3.  Test the `start_snippet` for uniqueness using the same logic as
             a single `snippet` (steps 2-4 above), adding an `anchor` if
             necessary to disambiguate it. The `end_snippet` does not need
