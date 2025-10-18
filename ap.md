@@ -419,7 +419,11 @@ critical step.
         the block to define the indentation for the entire block. Every subsequent
         line in that block MUST have at least that same level of indentation.
         Any line indented less than the first line will break the block and
-        corrupt the file.
+        corrupt the file. In other words, for a YAML parser to parse a patch
+        correctly, the first line of all code fragments (anchor, snippets and
+        content) must have an indentation no greater than all subsequent lines
+        of this fragment. If this rule is not met, the selected fragment should be
+        adjusted.
 
     3.  **List Item Alignment**: Each item in a YAML list (sequence) begins with a
         hyphen (`-`). All hyphens for items within the same list MUST have the exact
