@@ -405,44 +405,62 @@ critical step.
     of code instead of the entire line, from the frist non-space character
     to the last one. This shouldn't happen.
 
-   - **YAML Indentation Integrity**: Before finalizing the output, the AI MUST
-     perform a final self-check on the generated YAML's indentation. This is one
-     of the most common and critical sources of errors. The check has two parts:
+  - **YAML Indentation Integrity**: Before finalizing the output, the AI MUST
+    perform a final self-check on the generated YAML's indentation. This is one
+    of the most common and critical sources of errors. The check has three parts:
 
-     1.  **Key Alignment**: All keys that are siblings in the same object (e.g.,
-         `action`, `snippet`, `anchor`, and `content`) MUST have the exact same
-         starting indentation.
+    1.  **Key Alignment**: All keys that are siblings in the same object (e.g.,
+        `action`, `snippet`, `anchor`, and `content`) MUST have the exact same
+        starting indentation.
 
-     2.  **Multi-line Value Consistency**: When creating a multi-line value block
-         with `|`, the YAML parser uses the indentation of the **first line** of the
-         block to define the indentation for the entire block. Every subsequent
-         line in that block MUST have at least that same level of indentation.
-         Any line indented less than the first line will break the block and
-         corrupt the file.
+    2.  **Multi-line Value Consistency**: When creating a multi-line value block
+        with `|`, the YAML parser uses the indentation of the **first line** of
+        the block to define the indentation for the entire block. Every subsequent
+        line in that block MUST have at least that same level of indentation.
+        Any line indented less than the first line will break the block and
+        corrupt the file.
 
-     For example, this is a common, **invalid** generation showing both types of errors:
-     ```yaml
-     # WRONG:
-     - action: REPLACE
-       snippet: |
-         def old_function():
-             pass
-         content: |        # <-- Error 1: This key is misaligned with 'snippet'
-             def new_function():
-           return True  # <-- Error 2: Indentation is less than the first line's, breaking the value block
-     ```
+    3.  **List Item Alignment**: Each item in a YAML list (sequence) begins with a
+        hyphen (`-`). All hyphens for items within the same list MUST have the exact
+        same starting indentation. Incorrectly indenting a subsequent hyphen will
+        cause the YAML parser to interpret it not as a new list item, but as a
+        nested value of the preceding item, which is a common source of syntax
+        errors when a block sequence is used as an implicit key.
 
-     This is the **correct** structure:
-     ```yaml
-     # CORRECT:
-     - action: REPLACE
-       snippet: |
-         def old_function():
-             pass
-       content: |           # <-- Correctly aligned with 'snippet'
-         def new_function():
-             return True  # <-- Correctly indented, consistent with the block's first line
-     ```
+    For example, this is a common, **invalid** generation showing violations
+    of all three rules:
+
+    ```yaml
+    # WRONG:
+    modifications:
+      - action: REPLACE
+        snippet: |
+          def old_function():
+              pass
+          content: |       # Error 1 (Key Alignment): This key is misaligned with its sibling 'snippet'.
+              def new_function():
+            return True    # Error 2 (Multi-line Value): Indentation is less than the first line's, breaking the value block.
+        - action: REPLACE  # Error 3 (List Item Alignment): This hyphen is misaligned, making it an invalid nested value, not a sibling list item.
+          snippet: |
+            // some code
+    ```
+
+    This is the **correct** structure:
+
+    ```yaml
+    # CORRECT:
+    modifications:
+      - action: REPLACE
+        snippet: |
+          def old_function():
+              pass
+        content: |         # Correctly aligned with 'snippet'.
+          def new_function():
+              return True  # Correctly indented, consistent with the block's first line.
+      - action: REPLACE    # Correctly aligned, making it a sibling of the previous item.
+        snippet: |
+          // some code
+    ```
 
 ## 5. Complete Example
 
