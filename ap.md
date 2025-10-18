@@ -403,7 +403,8 @@ critical step.
     perform a final self-check on the generated snippets and anchors.
     A common source of problems is using a substring of the original line
     of code instead of the entire line, from the frist non-space character
-    to the last one. This shouldn't happen.
+    to the last one. This shouldn't happen. Another common source of problems
+    is non-unique anchors or snippets. This SHOULD also be checked twice.
 
   - **YAML Indentation Integrity**: Before finalizing the output, the AI MUST
     perform a final self-check on the generated YAML's indentation. This is one
