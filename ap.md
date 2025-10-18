@@ -352,6 +352,12 @@
      requested change. Unrelated refactoring MUST be avoided unless
      explicitly requested.
 
+  - **Only full strings**: Before finalizing the output, the AI MUST
+    perform a final self-check on the generated snippets and anchors.
+    A common source of problems is using a substring of the original line
+    of code instead of the entire line, from the frist non-space character
+    to the last one. This shouldn't happen.
+
    - **YAML Indentation Integrity**: Before finalizing the output, the AI MUST
      perform a final self-check on the generated YAML's indentation. This is one
      of the most common and critical sources of errors. The check has two parts:
