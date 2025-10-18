@@ -352,6 +352,45 @@
      requested change. Unrelated refactoring MUST be avoided unless
      explicitly requested.
 
+   - **YAML Indentation Integrity**: Before finalizing the output, the AI MUST
+     perform a final self-check on the generated YAML's indentation. This is one
+     of the most common and critical sources of errors. The check has two parts:
+
+     1.  **Key Alignment**: All keys that are siblings in the same object (e.g.,
+         `action`, `snippet`, `anchor`, and `content`) MUST have the exact same
+         starting indentation.
+
+     2.  **Multi-line Value Consistency**: When creating a multi-line value block
+         with `|`, the YAML parser uses the indentation of the **first line** of the
+         block to define the indentation for the entire block. Every subsequent
+         line in that block MUST have at least that same level of indentation.
+         Any line indented less than the first line will break the block and
+         corrupt the file.
+
+     For example, this is a common, **invalid** generation showing both types of errors:
+     ```yaml
+     # WRONG:
+     - action: REPLACE
+       snippet: |
+         def old_function():
+             pass
+         content: |        # <-- Error 1: This key is misaligned with 'snippet'
+             def new_function():
+           return True  # <-- Error 2: Indentation is less than the first line's, breaking the value block
+     ```
+
+     This is the **correct** structure:
+     ```yaml
+     # CORRECT:
+     - action: REPLACE
+       snippet: |
+         def old_function():
+             pass
+       content: |           # <-- Correctly aligned with 'snippet'
+         def new_function():
+             return True  # <-- Correctly indented, consistent with the block's first line
+     ```
+
 ### 4.3. Locator Selection Strategy
 
 To create robust and minimal patches, an AI model MUST follow a specific
