@@ -123,17 +123,33 @@ def find_target_in_content(
 
 def apply_patch(
     patch_file: str, project_dir: str, dry_run: bool = False,
-    json_report: bool = False, debug: bool = False
+    json_report: bool = False, debug: bool = False, force: bool = False
 ) -> Dict[str, Any]:
-    def report_error(details):
-        if not json_report:
-            file_info = f" in file '{details.get('file_path')}'" if details.get('file_path') else ""
-            mod_info = ""
-            if 'mod_idx' in details:
-                mod_info = f" (modification #{details['mod_idx'] + 1})"
+    if force and os.path.exists("afailed.ap"):
+        return report_error({
+            "status": "FAILED",
+            "error": { "code": "AFAILED_EXISTS", "message": "'afailed.ap' already exists. Please remove or rename it before running with --force." }
+        })
 
-            print(f"\nERROR{file_info}{mod_info}: {details['error']['message']}")
-            ctx = details['error'].get('context', {})
+    def report_error(details, is_force_warning=False):
+        file_path = details.get('file_path')
+        mod_idx = details.get('mod_idx')
+        error = details.get('error', {})
+        message = error.get('message', 'Unknown error')
+
+        if is_force_warning:
+            mod_info = f" (modification #{mod_idx + 1})" if mod_idx is not None else ""
+            print(f"WARNING: Skipping modification for '{file_path}'{mod_info}: {message}")
+            return
+
+        if not json_report:
+            file_info = f" in file '{file_path}'" if file_path else ""
+            mod_info = ""
+            if mod_idx is not None:
+                mod_info = f" (modification #{mod_idx + 1})"
+
+            print(f"\nERROR{file_info}{mod_info}: {message}")
+            ctx = error.get('context', {})
 
             def print_snippet(name, value):
                 print(f"  {name}:")
@@ -160,19 +176,34 @@ def apply_patch(
         })
 
     write_plan = []
+    all_failed_changes = []
     # --- PHASE 1: VALIDATE AND PREPARE ALL CHANGES IN MEMORY ---
     for change in data.get('changes', []):
         relative_path = change['file_path']
+        failed_mods_for_this_file = []
+
+        def handle_failure(error_details):
+            if not force:
+                return report_error(error_details)
+            report_error(error_details, is_force_warning=True)
+            if 'mod_idx' in error_details:
+                failed_mods_for_this_file.append(change['modifications'][error_details['mod_idx']])
+            else: # File-level error, fail all mods for this file
+                for mod in change.get('modifications', []):
+                    failed_mods_for_this_file.append(mod)
+            return None # Indicates handled failure
 
         real_project_dir = os.path.realpath(project_dir)
         real_file_path = os.path.realpath(os.path.join(project_dir, relative_path))
         if not real_file_path.startswith(os.path.join(real_project_dir, '')):
-            return report_error({
-                "status": "FAILED", "file_path": relative_path,
+            error_report = handle_failure({
+                "file_path": relative_path,
                 "error": {
                     "code": "INVALID_FILE_PATH",
-                    "message": "Path traversal detected. File path must be relative and stay within the project directory."
+                    "message": "Path traversal detected"
                 }})
+            if not force: return error_report
+            else: continue
 
         file_path = os.path.join(project_dir, relative_path)
         newline_mode = change.get('newline')
@@ -188,10 +219,12 @@ def apply_patch(
             if any(mod.get('action') == 'CREATE_FILE' for mod in change.get('modifications', [])):
                 original_content = ""
             else:
-                return report_error({
-                    "status": "FAILED", "file_path": relative_path,
+                error_report = handle_failure({
+                    "file_path": relative_path,
                     "error": { "code": "FILE_NOT_FOUND", "message": "Target file not found." }
                 })
+                if not force: return error_report
+                else: continue
 
         internal_newline = '\n'
         working_content = original_content.replace('\r\n', internal_newline).replace('\r', internal_newline)
@@ -200,15 +233,12 @@ def apply_patch(
             action = mod.get('action')
             debug_print(debug, f"MODIFICATION #{mod_idx}", action=action)
             if not action:
-                return report_error({
-                    "status": "FAILED",
-                    "file_path": relative_path,
-                    "mod_idx": mod_idx,
-                    "error": {
-                        "code": "INVALID_MODIFICATION",
-                        "message": "'action' is a required field."
-                    }
+                error_report = handle_failure({
+                    "file_path": relative_path, "mod_idx": mod_idx,
+                    "error": { "code": "INVALID_MODIFICATION", "message": "'action' is a required field." }
                 })
+                if not force: return error_report
+                else: continue
 
             content_to_add = mod.get('content', '')
             if action == 'CREATE_FILE':
@@ -232,25 +262,31 @@ def apply_patch(
 
             if snippet is not None:
                 if start_snippet is not None or end_snippet is not None:
-                    return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Cannot use 'snippet' with 'start_snippet' or 'end_snippet'."}})
+                    error_report = handle_failure({"file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Cannot use 'snippet' with 'start_snippet' or 'end_snippet'."}})
+                    if not force: return error_report
+                    else: continue
                 target_pos, error = find_target_in_content(working_content, mod.get('anchor'), snippet, debug)
             elif start_snippet is not None and end_snippet is not None:
                 if action not in ['REPLACE', 'DELETE']:
-                    return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range-based modification."}})
+                    error_report = handle_failure({"file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range-based modification."}})
+                    if not force: return error_report
+                    else: continue
 
                 start_pos_info, error = find_target_in_content(working_content, mod.get('anchor'), start_snippet, debug)
                 if not error:
                     start_range_begin, start_range_end = start_pos_info
                     end_occurrences = smart_find(working_content[start_range_end:], end_snippet)
                     if not end_occurrences:
-                        error = {"code": "END_SNIPPET_NOT_FOUND", "message": "End snippet not found after start snippet.", "context": {"start_snippet": start_snippet, "end_snippet": end_snippet}}
+                        error = {"code": "END_SNIPPER_NOT_FOUND", "message": "End snippet not found after start snippet.", "context": {"start_snippet": start_snippet, "end_snippet": end_snippet}}
                     else:
                         end_range_begin_rel, end_range_end_rel = end_occurrences[0]
                         final_start_pos = start_range_begin
                         final_end_pos = start_range_end + end_range_end_rel
                         target_pos = (final_start_pos, final_end_pos)
             else:
-                return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Modification must contain either 'snippet' or both 'start_snippet' and 'end_snippet'."}})
+                error_report = handle_failure({"file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Modification must contain either 'snippet' or both 'start_snippet' and 'end_snippet'."}})
+                if not force: return error_report
+                else: continue
 
             if error and error.get('code') == 'SNIPPET_NOT_FOUND':
                 if action == 'DELETE':
@@ -262,9 +298,11 @@ def apply_patch(
                         debug_print(debug, "IDEMPOTENCY SKIP", message="REPLACE snippet not found, but replacement content exists.", snippet=snippet)
                         continue
             if error:
-                report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
+                report = {"file_path": relative_path, "mod_idx": mod_idx, "error": error}
                 report['error']['context']['action'] = action
-                return report_error(report)
+                error_report = handle_failure(report)
+                if not force: return error_report
+                else: continue
 
             start_pos, end_pos = target_pos
             leading_blanks_to_include = mod.get('include_leading_blank_lines', 0)
@@ -325,7 +363,48 @@ def apply_patch(
         if final_content != original_content:
             write_plan.append((file_path, final_content, relative_path))
 
-    # --- PHASE 2: EXECUTE ALL PLANNED WRITES ---
+        if failed_mods_for_this_file:
+            failed_change_obj = {k:v for k,v in change.items() if k != 'modifications'}
+            failed_change_obj['modifications'] = failed_mods_for_this_file
+            all_failed_changes.append(failed_change_obj)
+
+    # --- PHASE 1.5: WRITE FAILED MODIFICATIONS IF IN FORCE MODE ---
+    if force and all_failed_changes:
+        # Custom YAML representer to force literal block style for specific strings.
+        class LiteralString(str): pass
+
+        def literal_representer(dumper, data):
+            return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
+
+        yaml.add_representer(LiteralString, literal_representer)
+
+        # Recursively convert relevant string fields to our custom LiteralString type.
+        def convert_to_literal_strings(node):
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key in ['snippet', 'start_snippet', 'end_snippet', 'content', 'anchor'] and isinstance(value, str):
+                        node[key] = LiteralString(value)
+                    else:
+                        convert_to_literal_strings(value)
+            elif isinstance(node, list):
+                for item in node:
+                    convert_to_literal_strings(item)
+            return node
+
+        afailed_data = {
+            'version': data.get('version', '2.0'),
+            'changes': all_failed_changes
+        }
+
+        # Process the data before dumping
+        afailed_data_literal = convert_to_literal_strings(afailed_data)
+
+        try:
+            with open("afailed.ap", 'w', encoding='utf-8') as f:
+                yaml.dump(afailed_data_literal, f, indent=2, sort_keys=False, allow_unicode=True)
+            print("\nINFO: Some modifications failed and were written to afailed.ap")
+        except IOError as e:
+             print(f"\nERROR: Could not write to afailed.ap: {e}")
     if not dry_run:
         for f_path, f_content, r_path in write_plan:
             try:
@@ -345,12 +424,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Apply an AI-friendly Patch (ap) file.")
     parser.add_argument("patch_file", help="Path to the .ap patch file.")
     parser.add_argument("--dir", default=".", help="The root directory of the source code.")
+    parser.add_argument("-f", "--force", action="store_true", help="Ignore atomicity and save failed modifications to 'afailed.ap'.")
     parser.add_argument("--dry-run", action="store_true", help="Show changes without modifying files.")
     parser.add_argument("--json-report", action="store_true", help="Output machine-readable JSON on failure.")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging.")
 
     args = parser.parse_args()
-    result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug)
+    result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug, args.force)
 
     if args.json_report and result['status'] != 'SUCCESS':
         print(json.dumps(result, indent=2))
