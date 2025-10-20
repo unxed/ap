@@ -10,9 +10,8 @@ If you've ever used an AI to help you code, you're familiar with this cycle:
 
 1.  **You:** "Change this function to handle a new edge case."
 2.  **AI:** "Sure! Here is the updated code..." (provides a new code block)
-3.  **You:** Manually copy the AI's code, find the right place in your file, paste it in, and fix the indentation.
-4.  **You:** Run the code. It fails.
-5.  **You:** Go back to the AI, explain the error, and repeat the whole cycle.
+3.  **You:** Manually copy the AI's code, find the right place in your file, paste it in and run the code. It fails.
+4.  **You:** Go back to the AI, explain the error, and repeat the whole cycle.
 
 The manual copy-paste step is the biggest bottleneck in this process. It's slow, tedious, and error-prone.
 
