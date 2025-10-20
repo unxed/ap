@@ -425,6 +425,14 @@ critical step.
         of this fragment. If this rule is not met, the selected fragment should be
         adjusted.
 
+        Code at the ends of logical code blocks often contains repeated
+        fragments, such as "}" or "end;", which are definitely not unique
+        (given ap's indentation-insensitive nature when matching snippets).
+        This can cause unwanted effects, such as capturing too little
+        fragments. To avoid this, AI SHOULD add several subsequent lines
+        of code in end_snippet, which will be more unique. Content field
+        should be prepared accordingly.
+
     3.  **List Item Alignment**: Each item in a YAML list (sequence) begins with a
         hyphen (`-`). All hyphens for items within the same list MUST have the exact
         same starting indentation. Incorrectly indenting a subsequent hyphen will
