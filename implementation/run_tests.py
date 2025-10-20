@@ -11,7 +11,7 @@ TESTS = [
     ("09_error_anchor_not_found", "negative", "ANCHOR_NOT_FOUND"),
     ("10_error_ambiguous", "negative", "AMBIGUOUS_MATCH"),
     ("11_error_invalid_yaml", "negative", "INVALID_PATCH_FILE"),
-    ("12_error_invalid_spec", "negative", "INVALID_MODIFICATION"),
+    ("12_error_invalid_spec", "negative", "INVALID_PATCH_FILE"),
     ("13_create_file", "positive", None),
     ("14_edge_cases", "positive", None),
     ("15_robustness", "positive", None),

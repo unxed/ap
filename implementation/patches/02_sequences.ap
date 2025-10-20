@@ -1,20 +1,21 @@
 # Summary: Tests the sequential application of multiple modifications within a single file.
-#
 # Plan:
 #   1. In `02_sequences.py`, insert a new import statement after `import os`.
 #   2. In the same file, delete the `deprecated_method`.
-#
-version: "2.0"
-changes:
-  - file_path: "02_sequences.py"
-    modifications:
-      - action: INSERT_AFTER
-        snippet: |
-          import os
-        content: |
-          import sys
-      - action: DELETE
-        snippet: |
-          def deprecated_method(self):
-              print("This should be removed.")
-        include_trailing_blank_lines: 1
+
+a22e6b0f AP 3.0
+
+a22e6b0f FILE
+02_sequences.py
+
+a22e6b0f INSERT_AFTER
+a22e6b0f snippet
+import os
+a22e6b0f content
+import sys
+
+a22e6b0f DELETE
+a22e6b0f snippet
+def deprecated_method(self):
+    print("This should be removed.")
+a22e6b0f include_trailing_blank_lines 1

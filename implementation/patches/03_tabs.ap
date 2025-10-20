@@ -1,14 +1,14 @@
 # Summary: Tests that the patcher correctly handles indentation in a file that uses tabs.
-#
 # Plan:
 #   1. In `03_tabs.py`, insert a new print statement, ensuring it inherits the correct tab-based indentation.
-#
-version: "2.0"
-changes:
-  - file_path: "03_tabs.py"
-    modifications:
-      - action: INSERT_AFTER
-        snippet: |
-          # A new line will be added here
-        content: |
-          print("...doing the work...")
+
+037ab500 AP 3.0
+
+037ab500 FILE
+03_tabs.py
+
+037ab500 INSERT_AFTER
+037ab500 snippet
+# A new line will be added here
+037ab500 content
+print("...doing the work...")

@@ -1,22 +1,24 @@
 # Summary: Tests actions with empty `content` fields (replace with nothing, insert nothing).
-#
 # Plan:
 #   1. In `16_empty_actions.txt`, replace a line with an empty string.
 #   2. Insert an empty string after another line (a no-op).
 #   3. Delete a third line.
-#
-version: "2.0"
-changes:
-  - file_path: "16_empty_actions.txt"
-    modifications:
-      - action: REPLACE
-        snippet: |
-          Line 1 to be replaced with nothing.
-        content: |
-      - action: INSERT_AFTER
-        snippet: |
-          Line 2 to have nothing inserted after.
-        content: |
-      - action: DELETE
-        snippet: |
-          Line 3 to be deleted.
+
+16e3971e AP 3.0
+
+16e3971e FILE
+16_empty_actions.txt
+
+16e3971e REPLACE
+16e3971e snippet
+Line 1 to be replaced with nothing.
+16e3971e content
+
+16e3971e INSERT_AFTER
+16e3971e snippet
+Line 2 to have nothing inserted after.
+16e3971e content
+
+16e3971e DELETE
+16e3971e snippet
+Line 3 to be deleted.

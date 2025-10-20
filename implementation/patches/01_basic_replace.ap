@@ -1,15 +1,15 @@
 # Summary: Tests a basic `REPLACE` action in a C++ file.
-#
 # Plan:
 #   1. In `01_basic.cpp`, replace the "Hello, old world!" string
 #      with "Hello, new world!".
-#
-version: "2.0"
-changes:
-  - file_path: "01_basic.cpp"
-    modifications:
-      - action: REPLACE
-        snippet: |
-          std::cout << "Hello, old world!" << std::endl;
-        content: |
-          std::cout << "Hello, new world!" << std::endl;
+
+01b451c4 AP 3.0
+
+01b451c4 FILE
+01_basic.cpp
+
+01b451c4 REPLACE
+01b451c4 snippet
+std::cout << "Hello, old world!" << std::endl;
+01b451c4 content
+std::cout << "Hello, new world!" << std::endl;

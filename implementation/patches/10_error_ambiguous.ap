@@ -1,15 +1,15 @@
 # Summary: Tests that the patcher fails correctly when a snippet is ambiguous and no anchor is provided.
-#
 # Plan:
 #   1. In `10_error_src.py`, attempt to replace a line that appears twice.
 #      The patch should fail with an AMBIGUOUS_MATCH error.
-#
-version: "2.0"
-changes:
-  - file_path: "10_error_src.py"
-    modifications:
-      - action: REPLACE
-        snippet: |
-          result = 1 + 1
-        content: |
-          result = 2
+
+10e22023 AP 3.0
+
+10e22023 FILE
+10_error_src.py
+
+10e22023 REPLACE
+10e22023 snippet
+result = 1 + 1
+10e22023 content
+result = 2

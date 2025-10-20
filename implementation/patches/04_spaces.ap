@@ -1,14 +1,14 @@
 # Summary: Tests that the patcher correctly handles indentation in a file that uses spaces.
-#
 # Plan:
 #   1. In `04_spaces.py`, insert a new print statement, ensuring it inherits the correct space-based indentation.
-#
-version: "2.0"
-changes:
-  - file_path: "04_spaces.py"
-    modifications:
-      - action: INSERT_AFTER
-        snippet: |
-          # A new line will be added here
-        content: |
-          print(f"Iteration {i}")
+
+4ce5ba90 AP 3.0
+
+4ce5ba90 FILE
+04_spaces.py
+
+4ce5ba90 INSERT_AFTER
+4ce5ba90 snippet
+# A new line will be added here
+4ce5ba90 content
+print(f"Iteration {i}")
