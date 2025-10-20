@@ -12,13 +12,13 @@
 181de390 snippet
 print("Initial line")
 181de390 content
-"""This function was patched."""
+    """This function was patched."""
 
 181de390 REPLACE
 181de390 snippet
 print("Initial line")
 181de390 content
-print("Patched line")
+    print("Patched line")
 
 181de390 DELETE
 181de390 snippet

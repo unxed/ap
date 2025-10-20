@@ -9,6 +9,6 @@
 
 037ab500 INSERT_AFTER
 037ab500 snippet
-# A new line will be added here
+	# A new line will be added here
 037ab500 content
-print("...doing the work...")
+	print("...doing the work...")

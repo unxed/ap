@@ -10,6 +10,6 @@
 
 01b451c4 REPLACE
 01b451c4 snippet
-std::cout << "Hello, old world!" << std::endl;
+    std::cout << "Hello, old world!" << std::endl;
 01b451c4 content
-std::cout << "Hello, new world!" << std::endl;
+    std::cout << "Hello, new world!" << std::endl;

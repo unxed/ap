@@ -19,7 +19,7 @@
 14ed8eca snippet
 print("original line")
 14ed8eca content
-print("new line with trailing whitespace")
+    print("new line with trailing whitespace")
 
 14ed8eca INSERT_AFTER
 14ed8eca snippet

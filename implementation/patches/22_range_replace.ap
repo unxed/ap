@@ -14,5 +14,5 @@
 222a48e1 end_snippet
 result = intermediate_result / len(processed_data)
 222a48e1 content
-# New, simplified implementation
-result = sum(processed_data)
+    # New, simplified implementation
+    result = sum(processed_data)

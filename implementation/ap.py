@@ -329,7 +329,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             first_char_pos = start_pos
             while first_char_pos < len(working_content) and working_content[first_char_pos] in ' \t': first_char_pos += 1
             line_start_idx = working_content.rfind(internal_newline, 0, first_char_pos) + 1
-            indentation = working_content[line_start_idx:first_char_pos]
+            indentation = ""; # indentation = working_content[line_start_idx:first_char_pos]
 
             indented_content = ""
             if content_to_add:

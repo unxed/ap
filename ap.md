@@ -144,8 +144,6 @@ A Patcher MUST use a consistent, normalized search algorithm for locating an `an
 
 ### 3.3. Modification Logic
 
-- **Indentation**: When performing any action involving `content` (`REPLACE`, `INSERT_AFTER`, `INSERT_BEFORE`), the Patcher MUST determine the indentation of the first line of the original `snippet` and apply that same indentation to every line of the new `content`.
-
 - **Blank Line Inclusion**: If `include_leading_blank_lines` or `include_trailing_blank_lines` are specified, the Patcher MUST expand the region to be modified to include the specified number of consecutive blank lines before or after the located `snippet`.
 
 - **Sequential Application**: Within a single file block, modifications MUST be processed sequentially in the order they are defined. The state of the file content *after* one modification has been calculated serves as the input for the search phase of the next modification. This sequential processing happens in memory before any files are written to disk.
@@ -203,20 +201,6 @@ To create robust and minimal patches, an AI model MUST follow a specific hierarc
 - **Minimalism and Focus:** Patches MUST be minimal and focused on the requested change. Unrelated refactoring MUST be avoided unless explicitly requested.
 
 - **Use Full Lines for Locators:** Snippets and anchors MUST correspond to full lines of code (from the first non-whitespace character to the last), not partial lines. The AI MUST perform a final self-check to ensure it is not using a substring of an original line.
-
-- **Write Snippets and Content Unindented:** When creating `snippet`, `start_snippet`, `end_snippet`, `anchor`, or `content` blocks, the AI MUST NOT include any common leading whitespace (indentation) that applies to the entire block. The code should be written as if it started in the first column. This is critical because the Patcher is responsible for automatically determining and applying the correct final indentation based on the code's destination. This is one of the most common source of errors. Before finalizing output, the AI MUST double-check that.
-  ```c
-  Bad example (having unneeded 4 leading spaces):
-      {
-          printf('Test');
-      }
-  ```
-  ```c
-  Good example:
-  {
-      printf('Test');
-  }
-  ```
 
 - **Inserting with Surrounding Blank Lines:** The Patcher automatically trims leading and trailing blank lines from `content`. Therefore, to reliably insert a block of code separated by blank lines (e.g., a new function between two existing ones), the AI SHOULD use a `REPLACE` action on the *next* stable block of code. The `content` for this action will then consist of: the new code to insert, a blank line, and then the original code from the `snippet` being replaced. This ensures precise control over formatting.
 

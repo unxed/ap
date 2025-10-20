@@ -9,6 +9,6 @@
 
 4ce5ba90 INSERT_AFTER
 4ce5ba90 snippet
-# A new line will be added here
+        # A new line will be added here
 4ce5ba90 content
-print(f"Iteration {i}")
+        print(f"Iteration {i}")

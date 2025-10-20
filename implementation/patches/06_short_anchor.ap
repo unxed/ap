@@ -14,4 +14,4 @@ def square(x):
 06a4c402 snippet
 return x * x
 06a4c402 content
-return pow(x, 2) # Use the pow function
+    return pow(x, 2) # Use the pow function

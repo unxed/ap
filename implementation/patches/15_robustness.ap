@@ -14,10 +14,10 @@ const unsafeConfig = {
 1520b057 snippet
 setting: "default" // This one SHOULD be changed
 1520b057 content
-setting: "overridden" // Changed safely within anchor
+        setting: "overridden" // Changed safely within anchor
 
 1520b057 REPLACE
 1520b057 snippet
 // Special chars: &*{}[]
 1520b057 content
-// All special characters handled correctly
+    // All special characters handled correctly
