@@ -428,12 +428,18 @@ critical step.
         adjusted.
 
         Code at the ends of logical code blocks often contains repeated
-        fragments, such as "}" or "end;", which are definitely not unique
-        (given ap's indentation-insensitive nature when matching snippets).
-        This can cause unwanted effects, such as capturing too little
-        fragments. To avoid this, AI SHOULD add several subsequent lines
-        of code in end_snippet, which will be more unique. Content field
-        should be prepared accordingly.
+        fragments, such as "}" or "end;", which are not unique within a file
+        (given ap's indentation-insensitive matching). To avoid ambiguous or
+        truncated range selections, AI SHOULD prefer using subsequent lines of
+        code as end_snippet, for example the signature of the next function or
+        the first lines of the following logical block. The content field
+        SHOULD be prepared accordingly.
+        This strategy improves both snippet uniqueness and multi-line value
+        consistency.
+        This should not be applied to DELETE action or the snippets located
+        at the end of file. The RECOMMENDED approach for such cases is to make
+        the end_snippet unique by including more bottom lines of code within
+        the target block.
 
     3.  **List Item Alignment**: Each item in a YAML list (sequence) begins with a
         hyphen (`-`). All hyphens for items within the same list MUST have the exact
