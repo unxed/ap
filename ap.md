@@ -160,7 +160,7 @@ The Patcher MUST provide clear, human-readable error messages for failure condit
 
 After all modifications for a file have been applied in memory, the Patcher MUST remove all trailing whitespace characters (spaces and tabs) from every line of the file's final content before writing it to disk.
 
-## 4. Best Practices for AI Generation
+## 4. AI Generation Rules
 
 ### 4.1. The "Plan-First" Principle
 
@@ -189,16 +189,12 @@ To create robust and minimal patches, an AI model MUST follow a specific hierarc
         2.  Identify the first corresponding `end_snippet` that appears after the start snippet. This snippet should also be as short and stable as possible.
         3.  Test the `start_snippet` for uniqueness using the same logic as a single `snippet`, adding an `anchor` if necessary to disambiguate it.
 
-### 4.3. General Best Practices
+### 4.3. Other Generation Rules
 
 - **Choose Stable and Independent Snippets for Ranges:** When using a `start_snippet`/`end_snippet` pair, the AI MUST adhere to the following critical rules to avoid generating failing patches:
     1.  **Snippets MUST be independent.** The `end_snippet` MUST be located entirely *after* the `start_snippet` in the original file. They cannot overlap, and the `end_snippet` cannot be a part of the `start_snippet`.
     2.  **Snippets MUST be minimal.** The `start_snippet` and `end_snippet` should be as short as possible while uniquely identifying the start and end of the desired block. Do NOT include the entire content of the block to be replaced inside the `start_snippet`.
     3.  **Snippets MUST be stable.** Avoid using content that is likely to change, such as numbered list items, line counters, or timestamps, as part of your snippets. Prefer semantic anchors like comments, declarations, or unique punctuation.
-
-- **Generate and Use a Consistent ID:** The AI MUST generate an 8-character random hexadecimal string for the patch `[ID]` and use it consistently as the prefix for every directive line.
-
-- **Use Comments for Planning:** The patch file SHOULD begin with a commented-out `Summary` and `Plan`.
 
 - **Structure Logically:** The AI MUST structure the patch with a clear hierarchy: start with the `FILE` directive, then begin each modification with an `ACTION` directive (`REPLACE`, `DELETE`, etc.).
 
@@ -208,7 +204,7 @@ To create robust and minimal patches, an AI model MUST follow a specific hierarc
 
 - **Use Full Lines for Locators:** Snippets and anchors MUST correspond to full lines of code (from the first non-whitespace character to the last), not partial lines. The AI MUST perform a final self-check to ensure it is not using a substring of an original line.
 
-- **Write Snippets and Content Unindented:** When creating `snippet`, `start_snippet`, `end_snippet`, `anchor`, or `content` blocks, the AI MUST NOT include any common leading whitespace (indentation) that applies to the entire block. The code should be written as if it started in the first column. This is critical because the Patcher is responsible for automatically determining and applying the correct final indentation based on the code's destination.
+- **Write Snippets and Content Unindented:** When creating `snippet`, `start_snippet`, `end_snippet`, `anchor`, or `content` blocks, the AI MUST NOT include any common leading whitespace (indentation) that applies to the entire block. The code should be written as if it started in the first column. This is critical because the Patcher is responsible for automatically determining and applying the correct final indentation based on the code's destination. This is one of the most common source of errors. Before finalizing output, the AI MUST double-check that.
   ```c
   Bad example (having unneeded 4 leading spaces):
       {
