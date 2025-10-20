@@ -10,9 +10,8 @@ If you've ever used an AI to help you code, you're familiar with this cycle:
 
 1.  **You:** "Change this function to handle a new edge case."
 2.  **AI:** "Sure! Here is the updated code..." (provides a new code block)
-3.  **You:** Manually copy the AI's code, find the right place in your file, paste it in, and fix the indentation.
-4.  **You:** Run the code. It fails.
-5.  **You:** Go back to the AI, explain the error, and repeat the whole cycle.
+3.  **You:** Manually copy the AI's code, find the right place in your file, paste it in and run the code. It fails.
+4.  **You:** Go back to the AI, explain the error, and repeat the whole cycle.
 
 The manual copy-paste step is the biggest bottleneck in this process. It's slow, tedious, and error-prone.
 
@@ -69,17 +68,21 @@ f0cacc1a FILE
 greeter.py
 
 f0cacc1a REPLACE
+
 f0cacc1a snippet
 print("Hello, world!")
+
 f0cacc1a content
 print("Hello, AI-powered world!")
 ```
+
+Don't be alarmed by `f0cacc1a`. It's just a random code, unique to each `ap` patch. Its presence protects against errors that can occur if the source or target files contain lines identical to ap format directives. For example, in a .sql file you might see the line "REPLACE", but you are unlikely to see "f0cacc1a REPLACE". This simple approach eliminates all the complexities associated with the need for escaping, which is easy for AI to get confused in.
 
 ### Applying the Patch
 
 Use a compatible patcher tool to apply the patch:
 ```
-python3 ap.py --patch afix.ap
+python3 ap.py afix.ap
 ```
 
 ### Checking the result
