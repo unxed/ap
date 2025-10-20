@@ -210,6 +210,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
     except FileNotFoundError:
         pass # This will be handled properly by the main parse function
     failed_changes_output = []
+    all_errors = []
     try: data = parse_ap3_format(patch_file)
     except (ValueError, FileNotFoundError) as e:
         return report_error({"status": "FAILED", "error": { "code": "INVALID_PATCH_FILE", "message": str(e) }})
@@ -241,7 +242,9 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         for mod_idx, mod in enumerate(change.get('modifications', [])):
             action = mod.get('action')
             debug_print(debug, f"MODIFICATION #{mod_idx+1}", action=action)
-            if not action: return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "'action' is required."}})
+            if not action:
+                all_errors.append(report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "'action' is required."}}))
+                continue
 
             content_to_add = mod.get('content', '')
             if action == 'CREATE_FILE':
@@ -260,10 +263,14 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             target_pos, error = None, {}
 
             if snippet is not None:
-                if start_snippet is not None or end_snippet is not None: return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Cannot use 'snippet' with range snippets."}})
+                if start_snippet is not None or end_snippet is not None:
+                    all_errors.append(report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Cannot use 'snippet' with range snippets."}}))
+                    continue
                 target_pos, error = find_target_in_content(working_content, mod.get('anchor'), snippet, debug)
             elif start_snippet is not None and end_snippet is not None:
-                if action not in ['REPLACE', 'DELETE']: return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range."}})
+                if action not in ['REPLACE', 'DELETE']:
+                    all_errors.append(report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range."}}))
+                    continue
                 start_pos_info, error = find_target_in_content(working_content, mod.get('anchor'), start_snippet, debug)
                 if not error:
                     start_range_begin, start_range_end = start_pos_info
@@ -272,7 +279,9 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     else:
                         end_range_begin_rel, end_range_end_rel = end_occurrences[0]
                         target_pos = (start_range_begin, start_range_end + end_range_end_rel)
-            elif action != 'CREATE_FILE': return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Modification requires locators."}})
+            elif action != 'CREATE_FILE':
+                all_errors.append(report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Modification requires locators."}}))
+                continue
 
             if error:
                 is_idempotency_skip = False
@@ -284,6 +293,8 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     if content_pos: debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet not found, but replacement content exists.", snippet=snippet or start_snippet); is_idempotency_skip = True
                 if is_idempotency_skip: continue
 
+                report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
+                report['error']['context']['action'] = action
                 if force:
                     print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action')}) in '{relative_path}'. Reason: {error.get('message')}")
                     failed_file_block = next((item for item in failed_changes_output if item.get('file_path') == relative_path), None)
@@ -293,10 +304,9 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         failed_changes_output.append(failed_file_block)
                     failed_file_block['modifications'].append(mod)
                     continue
-
-                report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
-                report['error']['context']['action'] = action
-                return report_error(report)
+                else:
+                    all_errors.append(report_error(report))
+                    continue
 
             if action == 'CREATE_FILE': continue
             start_pos, end_pos = target_pos
@@ -355,6 +365,11 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         if final_content != original_content:
             write_plan.append((file_path, final_content, relative_path))
 
+    if all_errors:
+        # Errors have been printed by report_error. Now return a summary.
+        if json_report:
+            return {"status": "FAILED", "errors": [e['error'] for e in all_errors]}
+        return {"status": "FAILED", "error": {"code": "MODIFICATION_FAILED", "message": "One or more modifications failed. See details above."}}
     if force and failed_changes_output:
         with open("afailed.ap", "w", encoding="utf-8") as f:
             f.write(f"# Summary: Failed changes from a forced patch application.\n\n")
