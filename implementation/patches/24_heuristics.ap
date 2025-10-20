@@ -1,0 +1,25 @@
+# Summary: Tests the robustness heuristics.
+# Plan:
+#  1. Test hybrid "suffix" search by targeting a line with a numbered prefix.
+#  2. Test range auto-correction where end_snippet is part of start_snippet.
+
+24e41571 AP 3.0
+
+24e41571 FILE
+24_heuristics.py
+
+24e41571 REPLACE
+24e41571 snippet
+# 1. First item
+24e41571 content
+    # First item (was successfully replaced via suffix search)
+
+24e41571 REPLACE
+24e41571 start_snippet
+# START of block to replace
+    # Middle of block
+    # END of block
+24e41571 end_snippet
+# END of block
+24e41571 content
+    # This block was replaced by the range auto-correction heuristic.

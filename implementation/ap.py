@@ -149,10 +149,16 @@ def smart_find(content: str, snippet: str) -> List[Tuple[int, int]]:
             if line.strip(): content_lines_found.append(line)
             end_line_index = temp_j
             temp_j += 1
-        if [line.strip() for line in content_lines_found] == normalized_snippet_lines:
-            start_pos = len("".join(original_lines[:i]))
-            end_pos = len("".join(original_lines[:end_line_index + 1]))
-            occurrences.append((start_pos, end_pos))
+
+        if len(content_lines_found) == len(snippet_lines):
+            normalized_content_lines = [line.strip() for line in content_lines_found]
+            # HYBRID SEARCH: First line is suffix, rest are exact match.
+            first_line_match = normalized_content_lines[0].endswith(normalized_snippet_lines[0])
+            tail_match = normalized_content_lines[1:] == normalized_snippet_lines[1:]
+            if first_line_match and tail_match:
+                start_pos = len("".join(original_lines[:i]))
+                end_pos = len("".join(original_lines[:end_line_index + 1]))
+                occurrences.append((start_pos, end_pos))
     return occurrences
 
 def find_target_in_content(content: str, anchor: Optional[str], snippet: str, debug: bool = False) -> Tuple[Optional[Tuple[int, int]], Dict[str, Any]]:
@@ -210,7 +216,6 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
     except FileNotFoundError:
         pass # This will be handled properly by the main parse function
     failed_changes_output = []
-    all_errors = []
     try: data = parse_ap3_format(patch_file)
     except (ValueError, FileNotFoundError) as e:
         return report_error({"status": "FAILED", "error": { "code": "INVALID_PATCH_FILE", "message": str(e) }})
@@ -243,8 +248,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             action = mod.get('action')
             debug_print(debug, f"MODIFICATION #{mod_idx+1}", action=action)
             if not action:
-                all_errors.append(report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "'action' is required."}}))
-                continue
+                return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "'action' is required."}})
 
             content_to_add = mod.get('content', '')
             if action == 'CREATE_FILE':
@@ -262,15 +266,19 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             snippet, start_snippet, end_snippet = mod.get('snippet'), mod.get('start_snippet'), mod.get('end_snippet')
             target_pos, error = None, {}
 
+            # Heuristic: Auto-correct AI error where end_snippet is part of start_snippet.
+            if start_snippet and end_snippet and start_snippet.strip().endswith(end_snippet.strip()):
+                debug_print(debug, "HEURISTIC APPLIED", message="end_snippet is suffix of start_snippet. Treating as single snippet.")
+                snippet = start_snippet
+                start_snippet, end_snippet = None, None
+
             if snippet is not None:
                 if start_snippet is not None or end_snippet is not None:
-                    all_errors.append(report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Cannot use 'snippet' with range snippets."}}))
-                    continue
+                    return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Cannot use 'snippet' with range snippets."}})
                 target_pos, error = find_target_in_content(working_content, mod.get('anchor'), snippet, debug)
             elif start_snippet is not None and end_snippet is not None:
                 if action not in ['REPLACE', 'DELETE']:
-                    all_errors.append(report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range."}}))
-                    continue
+                    return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range."}})
                 start_pos_info, error = find_target_in_content(working_content, mod.get('anchor'), start_snippet, debug)
                 if not error:
                     start_range_begin, start_range_end = start_pos_info
@@ -280,8 +288,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         end_range_begin_rel, end_range_end_rel = end_occurrences[0]
                         target_pos = (start_range_begin, start_range_end + end_range_end_rel)
             elif action != 'CREATE_FILE':
-                all_errors.append(report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Modification requires locators."}}))
-                continue
+                return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Modification requires locators."}})
 
             if error:
                 is_idempotency_skip = False
@@ -305,8 +312,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     failed_file_block['modifications'].append(mod)
                     continue
                 else:
-                    all_errors.append(report_error(report))
-                    continue
+                    return report_error(report)
 
             if action == 'CREATE_FILE': continue
             start_pos, end_pos = target_pos
@@ -365,11 +371,8 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         if final_content != original_content:
             write_plan.append((file_path, final_content, relative_path))
 
-    if all_errors:
-        # Errors have been printed by report_error. Now return a summary.
-        if json_report:
-            return {"status": "FAILED", "errors": [e['error'] for e in all_errors]}
-        return {"status": "FAILED", "error": {"code": "MODIFICATION_FAILED", "message": "One or more modifications failed. See details above."}}
+    if not write_plan and failed_changes_output: # All successful changes were no-ops, but some failed
+        return {"status": "FAILED", "error": {"code": "MODIFICATION_FAILED", "message": "One or more modifications failed."}}
     if force and failed_changes_output:
         with open("afailed.ap", "w", encoding="utf-8") as f:
             f.write(f"# Summary: Failed changes from a forced patch application.\n\n")

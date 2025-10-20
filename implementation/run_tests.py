@@ -23,6 +23,7 @@ TESTS = [
     ("21_error_atomic_failure", "negative", "SNIPPET_NOT_FOUND"),
 ("22_range_replace", "positive", None),
 ("23_error_range_ambiguous", "negative", "AMBIGUOUS_MATCH"),
+("24_heuristics", "positive", None),
 ]
 
 def get_paths(test_name):
@@ -44,8 +45,9 @@ def get_paths(test_name):
         "19_idempotency_noop": "19_idempotency_noop.py",
         "20_error_path_traversal": "dummy.txt",
         "21_error_atomic_failure": ["21_atomic_src1.txt", "21_atomic_src2.txt"],
-        "22_range_replace": "22_range_replace.py",
-        "23_error_range_ambiguous": "23_error_range_ambiguous.py",
+"22_range_replace": "22_range_replace.py",
+"23_error_range_ambiguous": "23_error_range_ambiguous.py",
+"24_heuristics": "24_heuristics.py",
     }
     src_filenames = file_map.get(test_name)
     if not src_filenames:
