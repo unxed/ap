@@ -1,25 +1,27 @@
 # Summary: Tests that a patch can be applied successfully multiple times without causing errors.
-#
 # Plan:
 #   1. In `18_idempotency.py`, perform a series of changes (INSERT, REPLACE, DELETE).
 #      The test runner will apply this patch twice to ensure the second run is a clean no-op.
-#
-version: "2.0"
-changes:
-  - file_path: "18_idempotency.py"
-    modifications:
-      - action: INSERT_BEFORE
-        snippet: |
-          print("Initial line")
-        content: |
-          """This function was patched."""
-      - action: REPLACE
-        snippet: |
-          print("Initial line")
-        content: |
-          print("Patched line")
-      - action: DELETE
-        snippet: |
-          def to_be_deleted():
-              pass
-        include_leading_blank_lines: 1
+
+181de390 AP 3.0
+
+181de390 FILE
+18_idempotency.py
+
+181de390 INSERT_BEFORE
+181de390 snippet
+print("Initial line")
+181de390 content
+    """This function was patched."""
+
+181de390 REPLACE
+181de390 snippet
+print("Initial line")
+181de390 content
+    print("Patched line")
+
+181de390 DELETE
+181de390 snippet
+def to_be_deleted():
+    pass
+181de390 include_leading_blank_lines 1

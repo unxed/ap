@@ -1,26 +1,28 @@
 # Summary: Tests edge cases like inserting at the beginning/end of a file and trailing whitespace removal.
-#
 # Plan:
 #   1. In `14_edge_cases.py`, insert a header before the first line.
 #   2. Replace a line with content that includes trailing whitespace (which should be stripped).
 #   3. Insert a footer after the last line.
-#
-version: "2.0"
-changes:
-  - file_path: "14_edge_cases.py"
-    modifications:
-      - action: INSERT_BEFORE
-        snippet: |
-          # Start of file
-        content: |
-          # This is a new header.
-      - action: REPLACE
-        snippet: |
-          print("original line")
-        content: |
-          print("new line with trailing whitespace")
-      - action: INSERT_AFTER
-        snippet: |
-          # End of file
-        content: |
-          # This is a new footer.
+
+14ed8eca AP 3.0
+
+14ed8eca FILE
+14_edge_cases.py
+
+14ed8eca INSERT_BEFORE
+14ed8eca snippet
+# Start of file
+14ed8eca content
+# This is a new header.
+
+14ed8eca REPLACE
+14ed8eca snippet
+print("original line")
+14ed8eca content
+    print("new line with trailing whitespace")
+
+14ed8eca INSERT_AFTER
+14ed8eca snippet
+# End of file
+14ed8eca content
+# This is a new footer.

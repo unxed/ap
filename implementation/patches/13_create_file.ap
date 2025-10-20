@@ -1,14 +1,13 @@
 # Summary: Tests the `CREATE_FILE` action.
-#
 # Plan:
 #   1. Create a new file at `new/created_file.txt` with specified content and CRLF line endings.
-#
-version: "2.0"
-changes:
-  - file_path: "new/created_file.txt"
-    newline: CRLF
-    modifications:
-      - action: CREATE_FILE
-        content: |
-          This file was created by a test.
-          It should use CRLF line endings.
+
+13c2ea7e AP 3.0
+
+13c2ea7e FILE CRLF
+new/created_file.txt
+
+13c2ea7e CREATE_FILE
+13c2ea7e content
+This file was created by a test.
+It should use CRLF line endings.

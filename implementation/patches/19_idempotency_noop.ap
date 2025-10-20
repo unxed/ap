@@ -1,25 +1,27 @@
 # Summary: Tests that applying a patch to an already-patched file results in no changes.
-#
 # Plan:
 #   1. The patch describes modifications that are already present in the source file `19_idempotency_noop.py`.
 #      The patcher should correctly identify each action as already completed and do nothing.
-#
-version: "2.0"
-changes:
-  - file_path: "19_idempotency_noop.py"
-    modifications:
-      - action: INSERT_BEFORE
-        snippet: |
-          print("Patched line")
-        content: |
-          """This function was patched."""
-      - action: REPLACE
-        snippet: |
-          print("Initial line")
-        content: |
-          print("Patched line")
-      - action: DELETE
-        snippet: |
-          def to_be_deleted():
-              pass
-        include_leading_blank_lines: 1
+
+191de391 AP 3.0
+
+191de391 FILE
+19_idempotency_noop.py
+
+191de391 INSERT_BEFORE
+191de391 snippet
+print("Patched line")
+191de391 content
+"""This function was patched."""
+
+191de391 REPLACE
+191de391 snippet
+print("Initial line")
+191de391 content
+print("Patched line")
+
+191de391 DELETE
+191de391 snippet
+def to_be_deleted():
+    pass
+191de391 include_leading_blank_lines 1

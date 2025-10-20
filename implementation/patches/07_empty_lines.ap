@@ -1,12 +1,12 @@
 # Summary: Tests the deletion of a code block surrounded by multiple empty lines.
-#
 # Plan:
 #   1. In `07_empty_lines.py`, delete a specific comment line.
-#
-version: "2.0"
-changes:
-  - file_path: "07_empty_lines.py"
-    modifications:
-      - action: DELETE
-        snippet: |
-          # Target line for deletion
+
+07de1e7e AP 3.0
+
+07de1e7e FILE
+07_empty_lines.py
+
+07de1e7e DELETE
+07de1e7e snippet
+# Target line for deletion

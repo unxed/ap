@@ -1,17 +1,17 @@
 # Summary: Tests that the patcher fails correctly when a snippet is not found.
-#
 # Plan:
 #   1. In `08_error_src.py`, attempt to replace a line that does not exist.
 #      The patch should fail with a SNIPPET_NOT_FOUND error.
-#
-version: "2.0"
-changes:
-  - file_path: "08_error_src.py"
-    modifications:
-      - action: REPLACE
-        anchor: |
-          def say_hello(self, name):
-        snippet: |
-          return f"Hello, {name}!" # Greet the user
-        content: |
-          pass
+
+08e22021 AP 3.0
+
+08e22021 FILE
+08_error_src.py
+
+08e22021 REPLACE
+08e22021 anchor
+def say_hello(self, name):
+08e22021 snippet
+return f"Hello, {name}!" # Greet the user
+08e22021 content
+pass

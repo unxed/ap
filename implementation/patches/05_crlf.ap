@@ -1,15 +1,14 @@
 # Summary: Tests the `newline: CRLF` option to enforce Windows-style line endings.
-#
 # Plan:
 #   1. In `05_crlf.txt`, replace a line of text. The output file should use CRLF.
-#
-version: "2.0"
-changes:
-  - file_path: "05_crlf.txt"
-    newline: CRLF
-    modifications:
-      - action: REPLACE
-        snippet: |
-          Second line to be replaced.
-        content: |
-          This is the new second line.
+
+05c21f00 AP 3.0
+
+05c21f00 FILE CRLF
+05_crlf.txt
+
+05c21f00 REPLACE
+05c21f00 snippet
+Second line to be replaced.
+05c21f00 content
+This is the new second line.

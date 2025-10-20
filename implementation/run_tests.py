@@ -10,8 +10,8 @@ TESTS = [
     ("08_error_snippet_not_found", "negative", "SNIPPET_NOT_FOUND"),
     ("09_error_anchor_not_found", "negative", "ANCHOR_NOT_FOUND"),
     ("10_error_ambiguous", "negative", "AMBIGUOUS_MATCH"),
-    ("11_error_invalid_yaml", "negative", "INVALID_PATCH_FILE"),
-    ("12_error_invalid_spec", "negative", "INVALID_MODIFICATION"),
+    ("11_error_invalid_header", "negative", "INVALID_PATCH_FILE"),
+    ("12_error_invalid_spec", "negative", "INVALID_PATCH_FILE"),
     ("13_create_file", "positive", None),
     ("14_edge_cases", "positive", None),
     ("15_robustness", "positive", None),
@@ -23,6 +23,7 @@ TESTS = [
     ("21_error_atomic_failure", "negative", "SNIPPET_NOT_FOUND"),
 ("22_range_replace", "positive", None),
 ("23_error_range_ambiguous", "negative", "AMBIGUOUS_MATCH"),
+("24_heuristics", "positive", None),
 ]
 
 def get_paths(test_name):
@@ -39,13 +40,14 @@ def get_paths(test_name):
         "15_robustness": "15_robustness.js",
         "16_empty_actions": "16_empty_actions.txt",
         "17_error_file_not_found": "dummy.txt",
-        "11_error_invalid_yaml": "dummy.txt", "12_error_invalid_spec": "dummy.txt",
+        "11_error_invalid_header": "dummy.txt", "12_error_invalid_spec": "dummy.txt",
         "18_idempotency": "18_idempotency.py",
         "19_idempotency_noop": "19_idempotency_noop.py",
         "20_error_path_traversal": "dummy.txt",
         "21_error_atomic_failure": ["21_atomic_src1.txt", "21_atomic_src2.txt"],
-        "22_range_replace": "22_range_replace.py",
-        "23_error_range_ambiguous": "23_error_range_ambiguous.py",
+"22_range_replace": "22_range_replace.py",
+"23_error_range_ambiguous": "23_error_range_ambiguous.py",
+"24_heuristics": "24_heuristics.py",
     }
     src_filenames = file_map.get(test_name)
     if not src_filenames:

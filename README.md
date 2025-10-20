@@ -10,9 +10,8 @@ If you've ever used an AI to help you code, you're familiar with this cycle:
 
 1.  **You:** "Change this function to handle a new edge case."
 2.  **AI:** "Sure! Here is the updated code..." (provides a new code block)
-3.  **You:** Manually copy the AI's code, find the right place in your file, paste it in, and fix the indentation.
-4.  **You:** Run the code. It fails.
-5.  **You:** Go back to the AI, explain the error, and repeat the whole cycle.
+3.  **You:** Manually copy the AI's code, find the right place in your file, paste it in and run the code. It fails.
+4.  **You:** Go back to the AI, explain the error, and repeat the whole cycle.
 
 The manual copy-paste step is the biggest bottleneck in this process. It's slow, tedious, and error-prone.
 
@@ -56,29 +55,34 @@ And you want the AI to change the greeting.
 
 You attach the .ap format spec (`ap.md` from this repository) to your prompt, and ask the AI ​​to give an answer in .ap format. So instead of generating the whole modified file, AI generates only small patch, lets call it `afix.ap` (this name is convenient in practice, as it places the file at the beginning of the list of files in the folder):
 
-```yaml
+```
 # Summary: Update the greeting message in greeter.py.
 #
 # Plan:
 #   1. In `greeter.py`, replace the "Hello, world!" string with
 #      "Hello, AI-powered world!".
-#
-version: "2.0"
-changes:
-  - file_path: "greeter.py"
-    modifications:
-      - action: REPLACE
-        snippet: |
-          print("Hello, world!")
-        content: |
-          print("Hello, AI-powered world!")
+
+f0cacc1a AP 3.0
+
+f0cacc1a FILE
+greeter.py
+
+f0cacc1a REPLACE
+
+f0cacc1a snippet
+print("Hello, world!")
+
+f0cacc1a content
+print("Hello, AI-powered world!")
 ```
+
+Don't be alarmed by `f0cacc1a`. It's just a random code, unique to each `ap` patch. Its presence protects against errors that can occur if the source or target files contain lines identical to ap format directives. For example, in a .sql file you might see the line "REPLACE", but you are unlikely to see "f0cacc1a REPLACE". This simple approach eliminates all the complexities associated with the need for escaping, which is easy for AI to get confused in.
 
 ### Applying the Patch
 
-Use ap.py from the "implementation" folder of this repo to apply the patch:
+Use a compatible patcher tool to apply the patch:
 ```
-python3 ap.py --patch afix.ap
+python3 ap.py afix.ap
 ```
 
 ### Checking the result
@@ -93,9 +97,10 @@ def say_hello():
 
 ## How It Works
 
-The `ap` format is a simple YAML specification built on a few core ideas:
+The `ap` format is a simple, line-oriented specification built on a few core ideas:
 
-*   **Actions:** Each modification has a clear `action`, like `REPLACE`, `INSERT_AFTER`, `DELETE`, or `CREATE_FILE`.
+*   **Unique ID:** Each patch file starts with a unique 8-character hex ID (e.g., `f0cacc1a`). This ID is used as a prefix for every instruction line, making the format incredibly robust and eliminating a need for escaping and a potential confusion between instructions and the code itself.
+*   **Directives:** All instructions are simple directives like `FILE`, `REPLACE`, `INSERT_AFTER`, `snippet`, or `content`. There's no complex syntax, indentation, or quoting to get wrong.
 *   **Snippet:** The `snippet` is the exact piece of code you want to find. The patcher is smart enough to ignore leading whitespace and blank lines, making it resilient to formatting changes.
 *   **Anchor (Optional):** To avoid ambiguity (e.g., when the same line of code appears in multiple functions), you can provide an `anchor` — a larger, unique block of code (like a function signature) to narrow down the search.
 

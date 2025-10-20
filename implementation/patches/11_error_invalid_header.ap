@@ -1,0 +1,6 @@
+# Summary: Tests that the patcher fails gracefully on a malformed patch file header.
+# Plan:
+#   1. This patch file is deliberately malformed with an invalid ID in the header.
+#      The patch should fail with an INVALID_PATCH_FILE error.
+
+badheadr AP 3.0

@@ -1,14 +1,14 @@
-# Summary: Tests that the patcher fails when a modification is missing a required field (e.g., `action`).
-#
+# Summary: Tests that the patcher fails when a modification is invalid.
 # Plan:
-#   1. The patch file is missing the required `action` key in its modification.
-#      The patch should fail with an INVALID_MODIFICATION error.
-#
-version: "2.0"
-changes:
-  - file_path: "dummy.txt"
-    modifications:
-      - snippet: |
-          dummy
-        content: |
-          new content
+#   1. This patch file is missing an ACTION directive before `snippet`.
+#      The patch should fail with an INVALID_PATCH_FILE error.
+
+12e22025 AP 3.0
+
+12e22025 FILE
+dummy.txt
+
+12e22025 snippet
+dummy
+12e22025 content
+new content

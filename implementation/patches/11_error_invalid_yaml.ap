@@ -1,9 +1,0 @@
-# Summary: Tests that the patcher fails gracefully on a malformed YAML file.
-#
-# Plan:
-#   1. The patch file itself contains a syntax error (a tab character).
-#      The patch should fail with an INVALID_PATCH_FILE error.
-#
-version: '2.0'
-changes:
-	- file_path: 'dummy.txt'

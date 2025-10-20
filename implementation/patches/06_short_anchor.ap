@@ -1,17 +1,17 @@
 # Summary: Tests the use of an `anchor` to disambiguate a snippet that appears multiple times.
-#
 # Plan:
 #   1. In `06_short_anchor.py`, replace `return x * x` specifically within the `square` function,
 #      leaving other identical lines unchanged.
-#
-version: "2.0"
-changes:
-  - file_path: "06_short_anchor.py"
-    modifications:
-      - action: REPLACE
-        anchor: |
-          def square(x):
-        snippet: |
-          return x * x
-        content: |
-          return pow(x, 2) # Use the pow function
+
+06a4c402 AP 3.0
+
+06a4c402 FILE
+06_short_anchor.py
+
+06a4c402 REPLACE
+06a4c402 anchor
+def square(x):
+06a4c402 snippet
+return x * x
+06a4c402 content
+    return pow(x, 2) # Use the pow function
