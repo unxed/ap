@@ -10,7 +10,7 @@
 
 24e41571 REPLACE
 24e41571 snippet
-# 1. First item
+First item
 24e41571 content
     # First item (was successfully replaced via suffix search)
 
