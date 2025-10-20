@@ -191,6 +191,11 @@ To create robust and minimal patches, an AI model MUST follow a specific hierarc
 
 ### 4.3. General Best Practices
 
+- **Choose Stable and Independent Snippets for Ranges:** When using a `start_snippet`/`end_snippet` pair, the AI MUST adhere to the following critical rules to avoid generating failing patches:
+    1.  **Snippets MUST be independent.** The `end_snippet` MUST be located entirely *after* the `start_snippet` in the original file. They cannot overlap, and the `end_snippet` cannot be a part of the `start_snippet`.
+    2.  **Snippets MUST be minimal.** The `start_snippet` and `end_snippet` should be as short as possible while uniquely identifying the start and end of the desired block. Do NOT include the entire content of the block to be replaced inside the `start_snippet`.
+    3.  **Snippets MUST be stable.** Avoid using content that is likely to change, such as numbered list items, line counters, or timestamps, as part of your snippets. Prefer semantic anchors like comments, declarations, or unique punctuation.
+
 - **Generate and Use a Consistent ID:** The AI MUST generate an 8-character random hexadecimal string for the patch `[ID]` and use it consistently as the prefix for every directive line.
 
 - **Use Comments for Planning:** The patch file SHOULD begin with a commented-out `Summary` and `Plan`.
