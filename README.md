@@ -74,6 +74,8 @@ f0cacc1a content
 print("Hello, AI-powered world!")
 ```
 
+Don't be alarmed by `f0cacc1a`. It's just a random code, unique to each `ap` patch. Its presence protects against errors that can occur if the source or target files contain lines identical to ap format directives. For example, in a .sql file you might see the line "REPLACE", but you are unlikely to see "f0cacc1a REPLACE". This simple approach eliminates all the complexities associated with the need for escaping, which is easy for AI to get confused in.
+
 ### Applying the Patch
 
 Use a compatible patcher tool to apply the patch:
