@@ -79,7 +79,7 @@ print("Hello, AI-powered world!")
 
 Use a compatible patcher tool to apply the patch:
 ```
-python3 ap.py --patch afix.ap
+python3 ap.py afix.ap
 ```
 
 ### Checking the result
