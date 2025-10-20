@@ -50,7 +50,7 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
         patch_id = match.group(1)
         directive_pattern = re.compile(rf'^{re.escape(patch_id)}\s+(.*)$')
         break
-    
+
     if not patch_id: return data
 
     # Main parsing loop
@@ -97,7 +97,7 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
                 if not current_file_change: raise ValueError(f"Newline '{key}' on line {line_num} before FILE.")
                 current_file_change['newline'] = key
             else: raise ValueError(f"Unknown directive '{key}' on line {line_num}.")
-        
+
         elif reading_key: value_lines.append(line)
         elif line.strip(): raise ValueError(f"Unexpected content on line {line_num}: '{line}'")
 
@@ -176,7 +176,7 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
     start_pos, end_pos = occurrences[0]
     return (start_pos + offset, end_pos + offset), {}
 
-def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_report: bool = False, debug: bool = False) -> Dict[str, Any]:
+def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_report: bool = False, debug: bool = False, force: bool = False) -> Dict[str, Any]:
     def report_error(details):
         if not json_report:
             file_info = f" in file '{details.get('file_path')}'" if details.get('file_path') else ""
@@ -193,6 +193,23 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 for match in ctx['fuzzy_matches']: print(f"    Line {match['line_number']} (Score: {match['score']}): {match['text']}")
         return details
 
+    if force and os.path.exists("afailed.ap"):
+        err_msg = "afailed.ap exists. Please remove or rename it before running with --force."
+        if json_report: return {"status": "FAILED", "error": {"code": "AFAILED_EXISTS", "message": err_msg}}
+        print(f"ERROR: {err_msg}")
+        exit(1)
+
+    patch_id_str = "00000000"
+    try:
+        with open(patch_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                match = re.match(r'^([a-f0-9]{8})\s+AP\s+3\.0$', line.strip())
+                if match:
+                    patch_id_str = match.group(1)
+                    break
+    except FileNotFoundError:
+        pass # This will be handled properly by the main parse function
+    failed_changes_output = []
     try: data = parse_ap3_format(patch_file)
     except (ValueError, FileNotFoundError) as e:
         return report_error({"status": "FAILED", "error": { "code": "INVALID_PATCH_FILE", "message": str(e) }})
@@ -201,7 +218,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
     for change in data.get('changes', []):
         if 'file_path' not in change: return report_error({"status": "FAILED", "error": {"code": "INVALID_PATCH_FILE", "message": "Missing 'file_path' for a change block."}})
         relative_path = change['file_path']
-        
+
         real_project_dir = os.path.realpath(project_dir)
         real_file_path = os.path.realpath(os.path.join(project_dir, relative_path))
         if not real_file_path.startswith(os.path.join(real_project_dir, '')):
@@ -256,7 +273,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         end_range_begin_rel, end_range_end_rel = end_occurrences[0]
                         target_pos = (start_range_begin, start_range_end + end_range_end_rel)
             elif action != 'CREATE_FILE': return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Modification requires locators."}})
-            
+
             if error:
                 is_idempotency_skip = False
                 error_codes = ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND', 'END_SNIPPET_NOT_FOUND']
@@ -266,6 +283,17 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     content_pos, _ = find_target_in_content(working_content, mod.get('anchor'), content_to_add or "", debug=False)
                     if content_pos: debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet not found, but replacement content exists.", snippet=snippet or start_snippet); is_idempotency_skip = True
                 if is_idempotency_skip: continue
+
+                if force:
+                    print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action')}) in '{relative_path}'. Reason: {error.get('message')}")
+                    failed_file_block = next((item for item in failed_changes_output if item.get('file_path') == relative_path), None)
+                    if not failed_file_block:
+                        failed_file_block = {'file_path': relative_path, 'modifications': []}
+                        if change.get('newline'): failed_file_block['newline'] = change.get('newline')
+                        failed_changes_output.append(failed_file_block)
+                    failed_file_block['modifications'].append(mod)
+                    continue
+
                 report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
                 report['error']['context']['action'] = action
                 return report_error(report)
@@ -287,9 +315,9 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         else: break
                     if val == -1: start_pos = pos
                     else: end_pos = pos
-            
+
             def normalize_block(text): return "\n".join(l.strip() for l in (text or "").strip().splitlines())
-            
+
             if action == 'REPLACE' and normalize_block(working_content[start_pos:end_pos]) == normalize_block(content_to_add): debug_print(debug, "IDEMPOTENCY SKIP", message="REPLACE content already present."); continue
             elif action == 'INSERT_AFTER' and normalize_block(working_content[end_pos:]).startswith(normalize_block(content_to_add)): debug_print(debug, "IDEMPOTENCY SKIP", message="INSERT_AFTER content already present."); continue
             elif action == 'INSERT_BEFORE' and normalize_block(working_content[:start_pos]).endswith(normalize_block(content_to_add)): debug_print(debug, "IDEMPOTENCY SKIP", message="INSERT_BEFORE content already present."); continue
@@ -297,12 +325,12 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             if action == 'DELETE':
                 working_content = working_content[:start_pos] + working_content[end_pos:]
                 continue
-            
+
             first_char_pos = start_pos
             while first_char_pos < len(working_content) and working_content[first_char_pos] in ' \t': first_char_pos += 1
             line_start_idx = working_content.rfind(internal_newline, 0, first_char_pos) + 1
             indentation = working_content[line_start_idx:first_char_pos]
-            
+
             indented_content = ""
             if content_to_add:
                 content_lines = content_to_add.splitlines()
@@ -319,12 +347,35 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 working_content = working_content[:end_pos] + indented_content + working_content[end_pos:]
             elif action == 'INSERT_BEFORE':
                 working_content = working_content[:start_pos] + indented_content + working_content[start_pos:]
+            if force:
+                print(f"  + SUCCESS: Mod #{mod_idx + 1} ({action}) applied.")
 
         final_content = newline_char.join([line.rstrip(' \t') for line in working_content.split(internal_newline)])
 
         if final_content != original_content:
             write_plan.append((file_path, final_content, relative_path))
 
+    if force and failed_changes_output:
+        with open("afailed.ap", "w", encoding="utf-8") as f:
+            f.write(f"# Summary: Failed changes from a forced patch application.\n\n")
+            f.write(f"{patch_id_str} AP 3.0\n\n")
+            for change_item in failed_changes_output:
+                f.write(f"{patch_id_str} FILE")
+                if change_item.get("newline"):
+                    f.write(f" {change_item['newline']}")
+                f.write(f"\n{change_item['file_path']}\n\n")
+                for mod_item in change_item['modifications']:
+                    f.write(f"{patch_id_str} {mod_item['action']}\n")
+                    for key in ['anchor', 'snippet', 'start_snippet', 'end_snippet', 'content']:
+                        if key in mod_item:
+                            f.write(f"{patch_id_str} {key}\n{mod_item[key]}\n")
+                    for key in ['include_leading_blank_lines', 'include_trailing_blank_lines']:
+                        if key in mod_item:
+                            f.write(f"{patch_id_str} {key} {mod_item[key]}\n")
+                    f.write("\n")
+        print(f"\nWARNING: Some changes failed and were written to afailed.ap")
+        if not write_plan:
+             return {"status": "FAILED", "error": {"code": "ALL_CHANGES_FAILED", "message": "All changes failed in force mode."}}
     if not dry_run:
         for f_path, f_content, r_path in write_plan:
             try:
@@ -342,12 +393,13 @@ if __name__ == '__main__':
     parser.add_argument("patch_file", help="Path to the .ap patch file.")
     parser.add_argument("--dir", default=".", help="The root directory of the source code.")
     parser.add_argument("--dry-run", action="store_true", help="Show changes without modifying files.")
+    parser.add_argument("-f", "--force", action="store_true", help="Force apply, skip atomicity and save failures to afailed.ap.")
     parser.add_argument("--json-report", action="store_true", help="Output machine-readable JSON on failure.")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging.")
     parser.add_argument("-v", "--version", action="version", version="ap patcher 3.0")
 
     args = parser.parse_args()
-    result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug)
+    result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug, args.force)
 
     if args.json_report and result['status'] != 'SUCCESS':
         print(json.dumps(result, indent=2))
