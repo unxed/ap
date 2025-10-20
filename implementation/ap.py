@@ -128,13 +128,27 @@ def apply_patch(
     def report_error(details):
         if not json_report:
             file_info = f" in file '{details.get('file_path')}'" if details.get('file_path') else ""
-            print(f"\nERROR{file_info}: {details['error']['message']}")
+            mod_info = ""
+            if 'mod_idx' in details:
+                mod_info = f" (modification #{details['mod_idx'] + 1})"
+
+            print(f"\nERROR{file_info}{mod_info}: {details['error']['message']}")
             ctx = details['error'].get('context', {})
-            if 'anchor' in ctx: print(f"---\nAnchor:\n{ctx['anchor']}\n---")
-            if 'snippet' in ctx: print(f"---\nSnippet:\n{ctx['snippet']}\n---")
+
+            def print_snippet(name, value):
+                print(f"  {name}:")
+                for line in value.strip().splitlines():
+                    print(f"    {line}")
+
+            if ctx.get('anchor'): print_snippet("Anchor", ctx['anchor'])
+            if ctx.get('snippet'): print_snippet("Snippet", ctx['snippet'])
+            if ctx.get('start_snippet'): print_snippet("Start Snippet", ctx['start_snippet'])
+            if ctx.get('end_snippet'): print_snippet("End Snippet", ctx['end_snippet'])
+
             if ctx.get('fuzzy_matches'):
-                print("Did you mean one of these?")
-                for match in ctx['fuzzy_matches']: print(f"  Line {match['line_number']} (Score: {match['score']}): {match['text']}")
+                print("  Did you mean one of these?")
+                for match in ctx['fuzzy_matches']:
+                    print(f"    Line {match['line_number']} (Score: {match['score']}): {match['text']}")
         return details
 
     try:
