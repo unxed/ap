@@ -208,7 +208,19 @@ To create robust and minimal patches, an AI model MUST follow a specific hierarc
 
 - **Use Full Lines for Locators:** Snippets and anchors MUST correspond to full lines of code (from the first non-whitespace character to the last), not partial lines. The AI MUST perform a final self-check to ensure it is not using a substring of an original line.
 
-- **Write Snippets and Content Unindented:** When creating `snippet`, `anchor`, or `content` blocks, the AI MUST NOT include any common leading whitespace (indentation) that applies to the entire block. The code should be written as if it started in the first column. This is critical because the Patcher is responsible for automatically determining and applying the correct final indentation based on the code's destination.
+- **Write Snippets and Content Unindented:** When creating `snippet`, `start_snippet`, `end_snippet`, `anchor`, or `content` blocks, the AI MUST NOT include any common leading whitespace (indentation) that applies to the entire block. The code should be written as if it started in the first column. This is critical because the Patcher is responsible for automatically determining and applying the correct final indentation based on the code's destination.
+  ```c
+  Bad example (having unneeded 4 leading spaces):
+      {
+          printf('Test');
+      }
+  ```
+  ```c
+  Good example:
+  {
+      printf('Test');
+  }
+  ```
 
 - **Inserting with Surrounding Blank Lines:** The Patcher automatically trims leading and trailing blank lines from `content`. Therefore, to reliably insert a block of code separated by blank lines (e.g., a new function between two existing ones), the AI SHOULD use a `REPLACE` action on the *next* stable block of code. The `content` for this action will then consist of: the new code to insert, a blank line, and then the original code from the `snippet` being replaced. This ensures precise control over formatting.
 
