@@ -68,8 +68,10 @@ f0cacc1a FILE
 greeter.py
 
 f0cacc1a REPLACE
+
 f0cacc1a snippet
 print("Hello, world!")
+
 f0cacc1a content
 print("Hello, AI-powered world!")
 ```
