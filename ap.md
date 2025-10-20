@@ -47,6 +47,8 @@ The first non-comment line of an `ap` patch file MUST be the header directive:
 - `[ID]` is a unique identifier for the entire patch, which MUST be a sequence of 8 random hexadecimal characters (e.g., `a1b2c3d4`).
 - This `[ID]` MUST be used as a prefix for all subsequent directives within the same file.
 
+A unique ID is needed to strictly separate `ap` format directives from content without the need for escaping and without the risk of a line similar to the directive appearing in the source or destination file. This also allows for the application of `ap` patches to `ap` patches.
+
 ### 2.3. Directives
 
 All instructions in the patch file are given through directives. A directive is a line that starts with the patch `[ID]`.
