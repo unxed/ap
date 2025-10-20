@@ -200,12 +200,14 @@
        leading/trailing whitespace removed, are identical to the processed
        list of lines from the text being sought.
 
-   **Important:** `anchor` and `snippet` MUST NOT start or end in the middle
-   of a source code line (leading whitespace characters do not count).
-   In other words, the first character of every anchor or snippet line
-   MUST be the first non-whitespace character of corresponding source file
-   line and the last character of every anchor or snippet line must be
-   the last non-whitespace character of corresponding source file line.
+   **Important:** `anchor`, `snippet`, `start_snippet` and `end_snippet`
+   MUST NOT start or end in the middle of a source code line (leading
+   whitespace characters do not count).
+   In other words, the first character of every anchor, snippet,
+   start_snippet or end_snippet line MUST be the first non-whitespace
+   character of corresponding source file line and the last character
+   of every anchor or snippet line must be the last non-whitespace
+   character of corresponding source file line.
    By line here we mean a line in the source file, not a logical construct
    that can be broken across multiple lines, such as a function signature
    or a natural language sentence.
