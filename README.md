@@ -53,7 +53,7 @@ And you want the AI to change the greeting.
 
 ### Generating .ap file
 
-You attach the .ap format spec (`ap.md` from this repository) to your prompt, and ask the AI ​​to give an answer in .ap format. So instead of generating the whole modified file, AI generates only small patch, lets call it `afix.ap` (this name is convenient in practice, as it places the file at the beginning of the list of files in the folder):
+You attach the .ap format spec ([ap.md](ap.md) from this repository) to your prompt, and ask the AI ​​to give an answer in .ap format. So instead of generating the whole modified file, AI generates only small patch, lets call it `afix.ap` (this name is convenient in practice, as it places the file at the beginning of the list of files in the folder):
 
 ```
 # Summary: Update the greeting message in greeter.py.
