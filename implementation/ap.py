@@ -35,7 +35,7 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
     reading_key = None
     value_lines = []
 
-    header_pattern = re.compile(r'^([a-f0-9]{8})\s+AP\s+3\.0$')
+    header_pattern = re.compile(r'^([a-z0-9]{8})\s+AP\s+3\.0$')
     directive_pattern = None
 
     line_iterator = iter(enumerate(lines, 1))
@@ -209,7 +209,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
     try:
         with open(patch_file, 'r', encoding='utf-8') as f:
             for line in f:
-                match = re.match(r'^([a-f0-9]{8})\s+AP\s+3\.0$', line.strip())
+                match = re.match(r'^([a-z0-9]{8})\s+AP\s+3\.0$', line.strip())
                 if match:
                     patch_id_str = match.group(1)
                     break

@@ -44,7 +44,7 @@ Any lines at the beginning of the file starting with `#` are considered comments
 The first non-comment line of an `ap` patch file MUST be the header directive:
 `[ID] AP 3.0`
 
-- `[ID]` is a unique identifier for the entire patch, which MUST be a sequence of 8 random hexadecimal characters (e.g., `a1b2c3d4`).
+- `[ID]` is a unique identifier for the entire patch, which MUST be a sequence of 8 random alphanumeric characters (e.g., `a0b1c2z9`).
 - This `[ID]` MUST be used as a prefix for all subsequent directives within the same file.
 
 A unique ID is needed to strictly separate `ap` format directives from content without the need for escaping and without the risk of a line similar to the directive appearing in the source or destination file. This also allows for the application of `ap` patches to `ap` patches.
@@ -233,7 +233,7 @@ def get_pi():
     return 3.14
 ```
 
-The following `patch.ap` file describes the modifications:
+The following `afix.ap` file describes the modifications:
 
 ```
 # Summary: Refactor the calculator module to enhance the `add` function
