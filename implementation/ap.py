@@ -272,7 +272,14 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
     occurrences = smart_find(search_space, snippet)
     debug_print(debug, "SNIPPET SEARCH RESULT", num_found=len(occurrences))
     if not occurrences:
-        context = {"snippet": snippet, "anchor": anchor, "anchor_found": anchor_found, "fuzzy_matches": get_fuzzy_matches(content, snippet)}
+        preview_lines = [l for l in search_space.splitlines() if l.strip()]
+        context = {
+            "snippet": snippet,
+            "anchor": anchor,
+            "anchor_found": anchor_found,
+            "fuzzy_matches": get_fuzzy_matches(search_space, snippet),
+            "search_space_preview": "\n".join(preview_lines[:7])
+        }
         return None, {"code": "SNIPPET_NOT_FOUND", "message": "Snippet not found.", "context": context}
     if len(occurrences) > 1 and not anchor: return None, {"code": "AMBIGUOUS_MATCH", "message": f"Snippet found {len(occurrences)} times.", "context": {"snippet": snippet, "count": len(occurrences)}}
     start_pos, end_pos = occurrences[0]
@@ -285,14 +292,28 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             mod_info = f" (modification #{details['mod_idx'] + 1})" if 'mod_idx' in details else ""
             print(f"\nERROR{file_info}{mod_info}: {details['error']['message']}")
             ctx = details['error'].get('context', {})
-            def print_snippet(name, value):
+
+            def print_block(name, value):
                 print(f"  {name}:")
-                for line in (value or "").strip().splitlines(): print(f"    {line}")
+                for line in (value or "").strip().splitlines():
+                    print(f"    {line}")
+
             for key in ['anchor', 'snippet', 'start_snippet', 'end_snippet']:
-                if ctx.get(key): print_snippet(key.replace('_', ' ').title(), ctx[key])
+                if ctx.get(key): print_block(key.replace('_', ' ').title(), ctx[key])
+
+            if ctx.get('anchor_found') and ctx.get('search_space_preview'):
+                print("  Context following found anchor (Actual File Content):")
+                for line in ctx['search_space_preview'].splitlines():
+                    print(f"    {line}")
+
             if ctx.get('fuzzy_matches'):
                 print("  Did you mean one of these?")
-                for match in ctx['fuzzy_matches']: print(f"    Line {match['line_number']} (Score: {match['score']}): {match['text']}")
+                for match in ctx['fuzzy_matches']:
+                    print(f"    Line {match['line_number']} (Score: {match['score']}):")
+                    print(f"      Actual:   {visualize_str(match['text'])}")
+                    expected_first = ctx.get('snippet', '').strip().splitlines()[0] if ctx.get('snippet') else ""
+                    print(f"      Expected: {visualize_str(expected_first)}")
+
         return details
 
     if force and os.path.exists("afailed.ap"):
