@@ -217,6 +217,10 @@ To create robust and minimal patches, an AI model MUST follow a specific hierarc
 
 - **Ensure Unique Locators**: Before finalizing output, the AI MUST double-check that any chosen `anchor` is unique within the file and any `snippet` (or `start_snippet`) without an `anchor` is also unique within the file.
 
+### 4.4. Other notices
+
+The reference patcher ensures that output files always end with a newline. This is not required by the format, but it is preferred. All examples in the documentation take this behavior into account.
+
 ## 5. Complete Example
 
 Given a target file `src/calculator.py`:
@@ -261,10 +265,10 @@ def add(a, b):
 e4a2f1b8 snippet
 return a + b
 e4a2f1b8 content
-# New implementation supports summing a list
-if isinstance(a, List):
-    return sum(a)
-return a + b
+    # New implementation supports summing a list
+    if isinstance(a, List):
+        return sum(a)
+    return a + b
 
 e4a2f1b8 DELETE
 e4a2f1b8 snippet
@@ -286,6 +290,7 @@ def add(a, b):
     if isinstance(a, List):
         return sum(a)
     return a + b
+
 ```
 
 ## 6. Security Considerations

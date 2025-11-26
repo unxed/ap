@@ -1,0 +1,30 @@
+# Summary: Refactor the calculator module (Doc Example).
+# Plan: Matches the example in ap.md, adapted for the test runner filename.
+
+e4a2f1b8 AP 3.0
+
+e4a2f1b8 FILE
+25_calculator.py
+
+e4a2f1b8 INSERT_AFTER
+e4a2f1b8 snippet
+import math
+e4a2f1b8 content
+from typing import List
+
+e4a2f1b8 REPLACE
+e4a2f1b8 anchor
+def add(a, b):
+e4a2f1b8 snippet
+return a + b
+e4a2f1b8 content
+    # New implementation supports summing a list
+    if isinstance(a, List):
+        return sum(a)
+    return a + b
+
+e4a2f1b8 DELETE
+e4a2f1b8 snippet
+def get_pi():
+    return 3.14
+e4a2f1b8 include_leading_blank_lines 1
