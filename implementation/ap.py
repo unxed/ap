@@ -207,8 +207,25 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
                 return None, {"code": "AMBIGUOUS_ANCHOR", "message": f"Anchor found {len(anchor_occurrences)} times and disambiguation failed.", "context": {"anchor": anchor, "count": len(anchor_occurrences)}}
 
         anchor_start, anchor_end = anchor_occurrences[0]
-        search_space, offset, anchor_found = content[anchor_end:], anchor_end, True
-        debug_print(debug, "ANCHOR FOUND", position=anchor_start, search_offset=offset)
+
+        # Heuristic: Check for Anchor-Snippet Overlap
+        # If the snippet starts with the anchor, searching after the anchor will fail.
+        # We check normalized lines to see if we should include the anchor in the search space.
+        s_lines = [l.strip() for l in (snippet or "").strip().splitlines() if l.strip()]
+        a_lines = [l.strip() for l in (anchor or "").strip().splitlines() if l.strip()]
+
+        is_overlap = False
+        if s_lines and a_lines and len(s_lines) >= len(a_lines):
+            if s_lines[:len(a_lines)] == a_lines:
+                is_overlap = True
+
+        if is_overlap:
+             debug_print(debug, "OVERLAP DETECTED", message="Snippet starts with Anchor. Including Anchor in search scope.")
+             search_space, offset, anchor_found = content[anchor_start:], anchor_start, True
+        else:
+             search_space, offset, anchor_found = content[anchor_end:], anchor_end, True
+
+        debug_print(debug, "ANCHOR FOUND", position=anchor_start, search_offset=offset, overlap=is_overlap)
 
     debug_print(debug, "SNIPPET SEARCH", snippet=snippet, search_space_len=len(search_space))
     occurrences = smart_find(search_space, snippet)

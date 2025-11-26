@@ -27,6 +27,7 @@ TESTS = [
     ("25_calculator_example", "positive", None),
     ("27_anchor_resolution", "positive", None),
     ("28_mixed_locators", "positive", None),
+    ("29_anchor_overlap", "positive", None),
 ]
 
 def get_paths(test_name):
@@ -54,6 +55,7 @@ def get_paths(test_name):
 "25_calculator_example": "25_calculator.py",
 "27_anchor_resolution": "27_anchor_resolution.py",
 "28_mixed_locators": "28_mixed_locators.py",
+"29_anchor_overlap": "29_anchor_overlap.py",
 "26_indent_change": "26_indent_change.py",
     }
     src_filenames = file_map.get(test_name)
