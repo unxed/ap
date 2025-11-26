@@ -1,0 +1,16 @@
+# Summary: Test disambiguation of repeated anchors.
+# Note: "def update(self):" appears twice. The patcher must use the snippet "self.value = 20"
+# to figure out we mean ConfigB.
+
+27a00111 AP 3.0
+
+27a00111 FILE
+27_anchor_resolution.py
+
+27a00111 REPLACE
+27a00111 anchor
+    def update(self):
+27a00111 snippet
+self.value = 20
+27a00111 content
+        self.value = 999

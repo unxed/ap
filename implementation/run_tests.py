@@ -25,6 +25,8 @@ TESTS = [
     ("23_error_range_ambiguous", "negative", "AMBIGUOUS_MATCH"),
     ("24_heuristics", "positive", None),
     ("25_calculator_example", "positive", None),
+    ("27_anchor_resolution", "positive", None),
+    ("28_mixed_locators", "positive", None),
 ]
 
 def get_paths(test_name):
@@ -50,6 +52,8 @@ def get_paths(test_name):
 "23_error_range_ambiguous": "23_error_range_ambiguous.py",
 "24_heuristics": "24_heuristics.py",
 "25_calculator_example": "25_calculator.py",
+"27_anchor_resolution": "27_anchor_resolution.py",
+"28_mixed_locators": "28_mixed_locators.py",
 "26_indent_change": "26_indent_change.py",
     }
     src_filenames = file_map.get(test_name)

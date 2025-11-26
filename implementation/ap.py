@@ -167,7 +167,45 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
         debug_print(debug, "ANCHOR SEARCH", anchor=anchor)
         anchor_occurrences = smart_find(content, anchor)
         if not anchor_occurrences: return None, {"code": "ANCHOR_NOT_FOUND", "message": "Anchor not found.", "context": {"anchor": anchor}}
-        if len(anchor_occurrences) > 1: return None, {"code": "AMBIGUOUS_ANCHOR", "message": f"Anchor found {len(anchor_occurrences)} times.", "context": {"anchor": anchor, "count": len(anchor_occurrences)}}
+
+        # Disambiguation logic: If multiple anchors, use the "closest parent" heuristic.
+        if len(anchor_occurrences) > 1:
+            debug_print(debug, "AMBIGUOUS ANCHOR", count=len(anchor_occurrences), message="Attempting disambiguation by proximity.")
+            # Global search for snippet to optimize
+            snippet_occurrences = smart_find(content, snippet)
+
+            valid_anchors = []
+            for i, (a_start, a_end) in enumerate(anchor_occurrences):
+                # Find first snippet occurrence that appears AFTER this anchor
+                target_snippet = None
+                for s_start, s_end in snippet_occurrences:
+                    if s_start >= a_end:
+                        target_snippet = (s_start, s_end)
+                        break
+
+                if not target_snippet:
+                    continue
+
+                s_start_abs = target_snippet[0]
+
+                # Shadowing Check: Verify no other instance of the same anchor appears
+                # strictly between the current anchor and the target snippet.
+                is_shadowed = False
+                for j, (other_a_start, other_a_end) in enumerate(anchor_occurrences):
+                    if i == j: continue
+                    if other_a_start >= a_end and other_a_end <= s_start_abs:
+                        is_shadowed = True
+                        break
+
+                if not is_shadowed:
+                    valid_anchors.append((a_start, a_end))
+
+            if len(valid_anchors) == 1:
+                anchor_occurrences = valid_anchors
+                debug_print(debug, "ANCHOR RESOLVED", position=anchor_occurrences[0][0])
+            else:
+                return None, {"code": "AMBIGUOUS_ANCHOR", "message": f"Anchor found {len(anchor_occurrences)} times and disambiguation failed.", "context": {"anchor": anchor, "count": len(anchor_occurrences)}}
+
         anchor_start, anchor_end = anchor_occurrences[0]
         search_space, offset, anchor_found = content[anchor_end:], anchor_end, True
         debug_print(debug, "ANCHOR FOUND", position=anchor_start, search_offset=offset)
@@ -266,6 +304,11 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             snippet, start_snippet, end_snippet = mod.get('snippet'), mod.get('start_snippet'), mod.get('end_snippet')
             target_pos, error = None, {}
 
+            # Robustness: If range is defined, ignore the single snippet (AI often outputs both).
+            if start_snippet is not None and end_snippet is not None and snippet is not None:
+                 debug_print(debug, "ROBUSTNESS APPLIED", message="Both snippet and range locators present. Ignoring 'snippet' in favor of range.")
+                 snippet = None
+
             # Heuristic: Auto-correct AI error where end_snippet is part of start_snippet.
             if start_snippet and end_snippet and start_snippet.strip().endswith(end_snippet.strip()):
                 debug_print(debug, "HEURISTIC APPLIED", message="end_snippet is suffix of start_snippet. Treating as single snippet.")
@@ -273,8 +316,6 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 start_snippet, end_snippet = None, None
 
             if snippet is not None:
-                if start_snippet is not None or end_snippet is not None:
-                    return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Cannot use 'snippet' with range snippets."}})
                 target_pos, error = find_target_in_content(working_content, mod.get('anchor'), snippet, debug)
             elif start_snippet is not None and end_snippet is not None:
                 if action not in ['REPLACE', 'DELETE']:
