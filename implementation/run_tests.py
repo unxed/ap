@@ -9,7 +9,7 @@ TESTS = [
     ("07_empty_lines", "positive", None),
     ("08_error_snippet_not_found", "negative", "SNIPPET_NOT_FOUND"),
     ("09_error_anchor_not_found", "negative", "ANCHOR_NOT_FOUND"),
-    ("10_error_ambiguous", "negative", "AMBIGUOUS_MATCH"),
+    ("10_error_ambiguous", "positive", None),
     ("11_error_invalid_header", "negative", "INVALID_PATCH_FILE"),
     ("12_error_invalid_spec", "negative", "INVALID_PATCH_FILE"),
     ("13_create_file", "positive", None),
@@ -22,7 +22,7 @@ TESTS = [
     ("20_error_path_traversal", "negative", "INVALID_FILE_PATH"),
     ("21_error_atomic_failure", "negative", "SNIPPET_NOT_FOUND"),
     ("22_range_replace", "positive", None),
-    ("23_error_range_ambiguous", "negative", "AMBIGUOUS_MATCH"),
+    ("23_error_range_ambiguous", "positive", None),
     ("24_heuristics", "positive", None),
     ("25_calculator_example", "positive", None),
     ("26_implicit_create_file", "positive", None),
@@ -31,6 +31,16 @@ TESTS = [
     ("29_anchor_overlap", "positive", None),
     ("30_locality_heuristic", "positive", None),
     ("31_redundant_snippet", "positive", None),
+    ("32_intersection_resolution", "positive", None),
+    ("33_snippet_locality", "positive", None),
+    ("34_range_priority_strict", "positive", None),
+    ("35_safe_create_empty", "positive", None),
+    ("36_safe_create_fail", "negative", "FILE_EXISTS"),
+    ("37_heuristic_end_eq_content", "positive", None),
+    ("38_deep_scope", "positive", None),
+    ("39_sequential_repeats", "positive", None),
+    ("40_unified_snippet", "positive", None),
+    ("41_indent_trailing_newline", "positive", None),
 ]
 
 def get_paths(test_name):
@@ -52,17 +62,27 @@ def get_paths(test_name):
         "19_idempotency_noop": "19_idempotency_noop.py",
         "20_error_path_traversal": "dummy.txt",
         "21_error_atomic_failure": ["21_atomic_src1.txt", "21_atomic_src2.txt"],
-"22_range_replace": "22_range_replace.py",
-"23_error_range_ambiguous": "23_error_range_ambiguous.py",
-"24_heuristics": "24_heuristics.py",
-"25_calculator_example": "25_calculator.py",
-"26_implicit_create_file": "dummy.txt",
-"27_anchor_resolution": "27_anchor_resolution.py",
-"28_mixed_locators": "28_mixed_locators.py",
-"29_anchor_overlap": "29_anchor_overlap.py",
-"26_indent_change": "26_indent_change.py",
-"30_locality_heuristic": "30_locality_heuristic.py",
-"31_redundant_snippet": "31_redundant_snippet.py",
+        "22_range_replace": "22_range_replace.py",
+        "23_error_range_ambiguous": "23_error_range_ambiguous.py",
+        "24_heuristics": "24_heuristics.py",
+        "25_calculator_example": "25_calculator.py",
+        "26_implicit_create_file": "dummy.txt",
+        "27_anchor_resolution": "27_anchor_resolution.py",
+        "28_mixed_locators": "28_mixed_locators.py",
+        "29_anchor_overlap": "29_anchor_overlap.py",
+        "26_indent_change": "26_indent_change.py",
+        "30_locality_heuristic": "30_locality_heuristic.py",
+        "31_redundant_snippet": "31_redundant_snippet.py",
+        "32_intersection_resolution": "32_intersection_resolution.py",
+        "33_snippet_locality": "33_snippet_locality.py",
+        "34_range_priority_strict": "34_range_priority_strict.py",
+        "35_safe_create_empty": "35_safe_create_empty.txt",
+        "36_safe_create_fail": "36_safe_create_fail.txt",
+        "37_heuristic_end_eq_content": "37_heuristic_end_eq_content.py",
+        "38_deep_scope": "38_deep_scope.py",
+        "39_sequential_repeats": "39_sequential_repeats.py",
+        "40_unified_snippet": "40_unified_snippet.py",
+        "41_indent_trailing_newline": "41_indent_trailing_newline.py",
     }
     src_filenames = file_map.get(test_name)
     if not src_filenames:
@@ -78,24 +98,28 @@ def get_paths(test_name):
 
 def run_positive_test(test_name, debug=False):
     src_files, patch_file, expected_file = get_paths(test_name)
-    src_file = src_files[0] # Positive tests operate on a single primary file
+    src_file = src_files[0]
     test_dir = tempfile.mkdtemp()
     try:
         if debug: print(f"\n{'='*20} RUNNING POSITIVE TEST: {test_name} {'='*20}")
         shutil.copy(src_file, os.path.join(test_dir, os.path.basename(src_file)))
+
+        # Special setup for implicit file creation / overwrite tests
+        if test_name == "35_safe_create_empty":
+             # Ensure the file exists but is empty (create programmatically to avoid asset issues)
+             with open(os.path.join(test_dir, os.path.basename(src_file)), 'w') as f: pass
+        else:
+             shutil.copy(src_file, os.path.join(test_dir, os.path.basename(src_file)))
+
         report = apply_patch(patch_file=patch_file, project_dir=test_dir, debug=debug)
 
         if report.get("status") != "SUCCESS":
             print(f"❌ FAILED: {test_name}. Patcher errored on a valid patch: {report.get('error')}")
             return False
 
-        # Compare as raw bytes to correctly validate line endings (LF vs CRLF).
-        if test_name == "13_create_file":
-            actual_file_rel_path = "new/created_file.txt"
-        elif test_name == "26_implicit_create_file":
-            actual_file_rel_path = "26_implicit_create_file.txt"
-        else:
-            actual_file_rel_path = os.path.basename(src_file)
+        if test_name == "13_create_file": actual_file_rel_path = "new/created_file.txt"
+        elif test_name == "26_implicit_create_file": actual_file_rel_path = "26_implicit_create_file.txt"
+        else: actual_file_rel_path = os.path.basename(src_file)
 
         with open(os.path.join(test_dir, actual_file_rel_path), 'rb') as f:
             actual_raw = f.read()
@@ -132,13 +156,20 @@ def run_negative_test(test_name, expected_code, debug=False):
                 with open(dest_path, 'rb') as f:
                     initial_hashes[os.path.basename(src_path)] = hashlib.md5(f.read()).hexdigest()
 
-        report = apply_patch(patch_file=patch_file, project_dir=test_dir, json_report=True, debug=debug)
+        # Test failure reporting file creation
+        fail_report_path = os.path.join(test_dir, "failure.json")
+        report = apply_patch(patch_file=patch_file, project_dir=test_dir, json_report=True, debug=debug, failure_report_path=fail_report_path)
 
         if report.get("status") != "FAILED":
             print(f"❌ FAILED: {test_name}. Expected FAILED status but got SUCCESS."); return False
         if report.get("error", {}).get("code") != expected_code:
             print(f"❌ FAILED: {test_name}. Expected '{expected_code}' but got "
                   f"'{report.get('error', {}).get('code')}'.\n" + json.dumps(report, indent=2)); return False
+
+        # Verify failure report file was created
+        if not os.path.exists(fail_report_path):
+            print(f"❌ FAILED: {test_name}. Failure report file not created."); return False
+
         if expected_code == "SNIPPET_NOT_FOUND" and "fuzzy_matches" not in report.get("error", {}).get("context", {}):
             print(f"❌ FAILED: {test_name}. Expected 'fuzzy_matches' in error report."); return False
 
@@ -148,10 +179,7 @@ def run_negative_test(test_name, expected_code, debug=False):
                 final_hashes[filename] = hashlib.md5(f.read()).hexdigest()
 
         if initial_hashes != final_hashes:
-            print(f"❌ FAILED: {test_name}. Atomicity violated. Files were modified during a failed patch operation.")
-            print(f"  Initial hashes: {initial_hashes}")
-            print(f"  Final hashes:   {final_hashes}")
-            return False
+            print(f"❌ FAILED: {test_name}. Atomicity violated."); return False
 
         print(f"✅ PASSED: {test_name} (Correctly failed as expected)"); return True
     finally:

@@ -12,4 +12,4 @@
 10e22023 snippet
 result = 1 + 1
 10e22023 content
-result = 2
+    result = 2

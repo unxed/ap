@@ -1,0 +1,17 @@
+# Test sequential patching of duplicate lines using locality.
+33a00777 AP 3.0
+33a00777 FILE
+33_snippet_locality.py
+33a00777 REPLACE
+33a00777 anchor
+# Start
+33a00777 snippet
+var = 1
+33a00777 content
+var = "A"
+
+33a00777 REPLACE
+33a00777 snippet
+var = 1
+33a00777 content
+var = "B"

@@ -1,0 +1,13 @@
+# Test Unified Snippet Field:
+# We uses 'snippet' + 'end_snippet'.
+# The parser should map 'snippet' to 'snippet', and the applier should work.
+t3st0040 AP 3.0
+t3st0040 FILE
+40_unified_snippet.py
+t3st0040 REPLACE
+t3st0040 snippet
+    # Block start
+t3st0040 end_snippet
+    # Block end
+t3st0040 content
+    # Replaced

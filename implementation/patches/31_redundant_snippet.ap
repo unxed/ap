@@ -1,5 +1,5 @@
 # Summary: Test explicit ignoring of snippet when range is present.
-# AI often outputs a 'snippet' that is just a copy of 'start_snippet' or part of the block.
+# AI often outputs a 'snippet' that is just a copy of 'snippet' or part of the block.
 # This should NOT fail ambiguity or not-found checks.
 
 31a00555 AP 3.0
@@ -10,7 +10,7 @@
 31a00555 REPLACE
 31a00555 snippet
     # Start block
-31a00555 start_snippet
+31a00555 snippet
     # Start block
 31a00555 end_snippet
     # End block

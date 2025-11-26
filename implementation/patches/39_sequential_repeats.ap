@@ -1,0 +1,22 @@
+# Test Sequential Locality (Cursor Logic):
+# We replace 3 identical lines sequentially.
+t3st0039 AP 3.0
+t3st0039 FILE
+39_sequential_repeats.py
+t3st0039 REPLACE
+t3st0039 snippet
+print("Repeated Line")
+t3st0039 content
+print("Line 1")
+
+t3st0039 REPLACE
+t3st0039 snippet
+print("Repeated Line")
+t3st0039 content
+print("Line 2")
+
+t3st0039 REPLACE
+t3st0039 snippet
+print("Repeated Line")
+t3st0039 content
+print("Line 3")

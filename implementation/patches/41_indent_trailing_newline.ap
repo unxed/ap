@@ -1,0 +1,14 @@
+# Summary: Test that trailing newlines in content are correctly indented.
+t3st0041 AP 3.0
+
+t3st0041 FILE
+41_indent_trailing_newline.py
+
+t3st0041 REPLACE
+t3st0041 snippet
+# This block will be replaced.
+t3st0041 end_snippet
+pass
+t3st0041 content
+    print("Line 1")
+    print("Line 2")

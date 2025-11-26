@@ -1,0 +1,7 @@
+# Test fail overwrite of non-empty file.
+36a00aaa AP 3.0
+
+36a00aaa CREATE_FILE
+36_safe_create_fail.txt
+36a00aaa content
+Should fail.

@@ -87,7 +87,7 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
             key, args = parts[0], parts[1] if len(parts) > 1 else None
 
             ACTIONS = {'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE'}
-            VALUE_KEYS = {'snippet', 'anchor', 'content', 'start_snippet', 'end_snippet'}
+            VALUE_KEYS = {'snippet', 'anchor', 'content', 'end_snippet'}
             ARG_KEYS = {'include_leading_blank_lines', 'include_trailing_blank_lines'}
             FILE_STARTERS = {'CREATE_FILE'} # Treated as hybrid Action/Value
             NEWLINE_VALS = {'LF', 'CRLF', 'CR'}
@@ -197,80 +197,84 @@ def smart_find(content: str, snippet: str) -> List[Tuple[int, int]]:
 
 def find_target_in_content(content: str, anchor: Optional[str], snippet: str, debug: bool = False, last_match_end: int = 0) -> Tuple[Optional[Tuple[int, int]], Dict[str, Any]]:
     search_space, offset, anchor_found = content, 0, None
+
     if anchor:
         debug_print(debug, "ANCHOR SEARCH", anchor=anchor)
         anchor_occurrences = smart_find(content, anchor)
-        if not anchor_occurrences: return None, {"code": "ANCHOR_NOT_FOUND", "message": "Anchor not found.", "context": {"anchor": anchor}}
+        if not anchor_occurrences:
+            return None, {"code": "ANCHOR_NOT_FOUND", "message": "Anchor not found.", "context": {"anchor": anchor}}
 
-        # Disambiguation logic: If multiple anchors, use the "closest parent" heuristic.
+        # === CURSOR FILTERING FOR ANCHORS ===
+        # If we have a history of changes, prefer anchors that appear AFTER the last change.
+        if len(anchor_occurrences) > 1 and last_match_end > 0:
+            forward_anchors = [a for a in anchor_occurrences if a[0] >= last_match_end]
+            if forward_anchors:
+                debug_print(debug, "ANCHOR CURSOR FILTER", message=f"Filtered {len(anchor_occurrences)} -> {len(forward_anchors)} based on cursor {last_match_end}")
+                anchor_occurrences = forward_anchors
+
+        # === DEEP SCOPE RESOLUTION ===
+        # If anchor is still ambiguous, check if the snippet exists uniquely inside one of the anchor scopes.
         if len(anchor_occurrences) > 1:
-            debug_print(debug, "AMBIGUOUS ANCHOR", count=len(anchor_occurrences), message="Attempting disambiguation by proximity.")
-            # Global search for snippet to optimize
-            snippet_occurrences = smart_find(content, snippet)
+            debug_print(debug, "DEEP SCOPE SEARCH", message=f"Anchor ambiguous ({len(anchor_occurrences)} matches). Checking snippets in scopes.")
+            valid_scopes = []
 
-            valid_anchors = []
-            for i, (a_start, a_end) in enumerate(anchor_occurrences):
-                # Find first snippet occurrence that appears AFTER this anchor
-                target_snippet = None
-                for s_start, s_end in snippet_occurrences:
-                    if s_start >= a_end:
-                        target_snippet = (s_start, s_end)
-                        break
+            # Pre-calculate all snippet occurrences to optimize
+            all_snippet_occurrences = smart_find(content, snippet)
 
-                if not target_snippet:
-                    continue
+            for a_idx, (a_start, a_end) in enumerate(anchor_occurrences):
+                # Scope extends to the start of the next anchor candidate or end of file
+                # (Simple heuristic: finding the snippet strictly after this anchor)
 
-                s_start_abs = target_snippet[0]
+                # Check 1: Are there any snippets after this anchor?
+                snippets_after = [s for s in all_snippet_occurrences if s[0] >= a_end]
 
-                # Shadowing Check: Verify no other instance of the same anchor appears
-                # strictly between the current anchor and the target snippet.
-                is_shadowed = False
-                for j, (other_a_start, other_a_end) in enumerate(anchor_occurrences):
-                    if i == j: continue
-                    if other_a_start >= a_end and other_a_end <= s_start_abs:
-                        is_shadowed = True
-                        break
+                if snippets_after:
+                    first_snip = snippets_after[0]
+                    # Check 2 (Shadowing): Is there ANOTHER anchor strictly between this anchor and the snippet?
+                    is_shadowed = any(other_a[0] > a_end and other_a[0] < first_snip[0] for other_a in anchor_occurrences)
 
-                if not is_shadowed:
-                    valid_anchors.append((a_start, a_end))
+                    if not is_shadowed:
+                        valid_scopes.append((a_start, a_end))
 
-            # LOCALITY HEURISTIC: If still ambiguous, prefer anchors appearing after the last modification.
-            if len(valid_anchors) > 1 and last_match_end > 0:
-                forward_anchors = [a for a in valid_anchors if a[0] >= last_match_end]
-                if len(forward_anchors) == 1:
-                    valid_anchors = forward_anchors
-                    debug_print(debug, "ANCHOR RESOLVED (LOCALITY)", position=valid_anchors[0][0])
+            if len(valid_scopes) == 1:
+                 anchor_occurrences = valid_scopes
+                 debug_print(debug, "AMBIGUITY RESOLVED (DEEP SCOPE)", position=anchor_occurrences[0][0])
+            # If 0 or >1 valid scopes, we fall through to the ambiguity error below.
 
-            if len(valid_anchors) == 1:
-                anchor_occurrences = valid_anchors
-                debug_print(debug, "ANCHOR RESOLVED", position=anchor_occurrences[0][0])
-            else:
-                return None, {"code": "AMBIGUOUS_ANCHOR", "message": f"Anchor found {len(anchor_occurrences)} times and disambiguation failed.", "context": {"anchor": anchor, "count": len(anchor_occurrences)}}
+        if len(anchor_occurrences) > 1:
+            return None, {"code": "AMBIGUOUS_ANCHOR", "message": f"Anchor found {len(anchor_occurrences)} times and ambiguity could not be resolved.", "context": {"anchor": anchor, "count": len(anchor_occurrences)}}
 
         anchor_start, anchor_end = anchor_occurrences[0]
 
-        # Heuristic: Check for Anchor-Snippet Overlap
-        # If the snippet starts with the anchor, searching after the anchor will fail.
-        # We check normalized lines to see if we should include the anchor in the search space.
+        # === ROBUST OVERLAP DETECTION ===
         s_lines = [l.strip() for l in (snippet or "").strip().splitlines() if l.strip()]
         a_lines = [l.strip() for l in (anchor or "").strip().splitlines() if l.strip()]
-
         is_overlap = False
-        if s_lines and a_lines and len(s_lines) >= len(a_lines):
-            if s_lines[:len(a_lines)] == a_lines:
+        if s_lines and a_lines:
+            # Check 1: Full inclusion (Snippet starts with Anchor)
+            if len(s_lines) >= len(a_lines) and s_lines[:len(a_lines)] == a_lines:
+                is_overlap = True
+            # Check 2: Partial overlap (Anchor ends with Snippet start)
+            elif a_lines[-1] == s_lines[0]:
                 is_overlap = True
 
         if is_overlap:
-             debug_print(debug, "OVERLAP DETECTED", message="Snippet starts with Anchor. Including Anchor in search scope.")
+             debug_print(debug, "OVERLAP DETECTED", message="Snippet overlaps with Anchor. Including Anchor in search scope.")
              search_space, offset, anchor_found = content[anchor_start:], anchor_start, True
         else:
              search_space, offset, anchor_found = content[anchor_end:], anchor_end, True
 
-        debug_print(debug, "ANCHOR FOUND", position=anchor_start, search_offset=offset, overlap=is_overlap)
-
     debug_print(debug, "SNIPPET SEARCH", snippet=snippet, search_space_len=len(search_space))
     occurrences = smart_find(search_space, snippet)
-    debug_print(debug, "SNIPPET SEARCH RESULT", num_found=len(occurrences))
+
+    # === SNIPPET CURSOR FILTER ===
+    # If multiple snippets found, strictly prefer the first one after the cursor.
+    if len(occurrences) > 1:
+        forward_occurrences = [o for o in occurrences if (o[0] + offset) >= last_match_end]
+        if forward_occurrences:
+            occurrences = [forward_occurrences[0]]
+            debug_print(debug, "SNIPPET AMBIGUITY RESOLVED (CURSOR)", position=occurrences[0][0])
+
     if not occurrences:
         preview_lines = [l for l in search_space.splitlines() if l.strip()]
         context = {
@@ -281,12 +285,23 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
             "search_space_preview": "\n".join(preview_lines[:7])
         }
         return None, {"code": "SNIPPET_NOT_FOUND", "message": "Snippet not found.", "context": context}
-    if len(occurrences) > 1 and not anchor: return None, {"code": "AMBIGUOUS_MATCH", "message": f"Snippet found {len(occurrences)} times.", "context": {"snippet": snippet, "count": len(occurrences)}}
+
+    if len(occurrences) > 1 and not anchor:
+        return None, {"code": "AMBIGUOUS_MATCH", "message": f"Snippet found {len(occurrences)} times.", "context": {"snippet": snippet, "count": len(occurrences)}}
+
     start_pos, end_pos = occurrences[0]
     return (start_pos + offset, end_pos + offset), {}
 
-def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_report: bool = False, debug: bool = False, force: bool = False) -> Dict[str, Any]:
+def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_report: bool = False, debug: bool = False, force: bool = False, failure_report_path: str = None) -> Dict[str, Any]:
     def report_error(details):
+        if failure_report_path:
+            try:
+                with open(failure_report_path, 'w', encoding='utf-8') as f:
+                    json.dump(details, f, indent=2)
+                if not json_report: print(f"Failure report saved to: {failure_report_path}")
+            except IOError as e:
+                print(f"Failed to save failure report: {e}")
+
         if not json_report:
             file_info = f" in file '{details.get('file_path')}'" if details.get('file_path') else ""
             mod_info = f" (modification #{details['mod_idx'] + 1})" if 'mod_idx' in details else ""
@@ -298,7 +313,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 for line in (value or "").strip().splitlines():
                     print(f"    {line}")
 
-            for key in ['anchor', 'snippet', 'start_snippet', 'end_snippet']:
+            for key in ['anchor', 'snippet', 'end_snippet']:
                 if ctx.get(key): print_block(key.replace('_', ' ').title(), ctx[key])
 
             if ctx.get('anchor_found') and ctx.get('search_space_preview'):
@@ -322,22 +337,21 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         print(f"ERROR: {err_msg}")
         exit(1)
 
+    try: data = parse_ap3_format(patch_file)
+    except (ValueError, FileNotFoundError) as e:
+        return report_error({"status": "FAILED", "error": { "code": "INVALID_PATCH_FILE", "message": str(e) }})
+
     patch_id_str = "00000000"
     try:
         with open(patch_file, 'r', encoding='utf-8') as f:
             for line in f:
                 match = re.match(r'^([a-z0-9]{8})\s+AP\s+3\.0$', line.strip())
-                if match:
-                    patch_id_str = match.group(1)
-                    break
-    except FileNotFoundError:
-        pass # This will be handled properly by the main parse function
-    failed_changes_output = []
-    try: data = parse_ap3_format(patch_file)
-    except (ValueError, FileNotFoundError) as e:
-        return report_error({"status": "FAILED", "error": { "code": "INVALID_PATCH_FILE", "message": str(e) }})
+                if match: patch_id_str = match.group(1); break
+    except: pass
 
+    failed_changes_output = []
     write_plan = []
+
     for change in data.get('changes', []):
         if 'file_path' not in change: return report_error({"status": "FAILED", "error": {"code": "INVALID_PATCH_FILE", "message": "Missing 'file_path' for a change block."}})
         relative_path = change['file_path']
@@ -354,7 +368,9 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
         try:
             with open(file_path, 'r', encoding='utf-8', newline=None) as f: original_content = f.read()
+            file_existed = True
         except FileNotFoundError:
+            file_existed = False
             if any(mod.get('action') == 'CREATE_FILE' for mod in change.get('modifications', [])): original_content = ""
             else: return report_error({"status": "FAILED", "file_path": relative_path, "error": { "code": "FILE_NOT_FOUND", "message": "Target file not found." }})
 
@@ -365,49 +381,72 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         for mod_idx, mod in enumerate(change.get('modifications', [])):
             action = mod.get('action')
             debug_print(debug, f"MODIFICATION #{mod_idx+1}", action=action)
-            if not action:
-                return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "'action' is required."}})
+            if not action: return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "'action' is required."}})
 
             content_to_add = mod.get('content', '')
+
+            # === SAFE CREATE FILE ===
             if action == 'CREATE_FILE':
                 if os.path.exists(file_path):
                     with open(file_path, 'r', encoding='utf-8', newline=None) as f_check:
                         existing_content = f_check.read().replace('\r\n', internal_newline).replace('\r', internal_newline)
+
                     normalized_existing = "\n".join(l.strip() for l in existing_content.strip().splitlines())
                     normalized_new = "\n".join(l.strip() for l in (content_to_add or "").strip().splitlines())
+
                     if normalized_existing == normalized_new:
                         debug_print(debug, "IDEMPOTENCY SKIP", message="File exists with matching content.", file_path=file_path)
                         break
+                    elif not existing_content.strip():
+                        debug_print(debug, "OVERWRITE EMPTY", message="File exists but is empty. Overwriting.")
+                        pass
+                    else:
+                        return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "FILE_EXISTS", "message": "Target file exists and is not empty."}})
+
                 working_content = (content_to_add or "").replace('\r\n', internal_newline).replace('\r', internal_newline)
                 break
 
-            snippet, start_snippet, end_snippet = mod.get('snippet'), mod.get('start_snippet'), mod.get('end_snippet')
+            snippet_val = mod.get('snippet')
+            end_snippet = mod.get('end_snippet')
+
+            # Heuristic: If end_snippet is identical to content, the AI likely confused "what to replace" with "what to replace it with".
+            # Treat this as a point-based replacement.
+            if snippet_val and end_snippet and content_to_add:
+                norm_end = "\n".join(l.strip() for l in end_snippet.strip().splitlines())
+                norm_content = "\n".join(l.strip() for l in content_to_add.strip().splitlines())
+                if norm_end == norm_content:
+                    debug_print(debug, "HEURISTIC APPLIED", message="end_snippet matches content. Treating as single snippet.")
+                    end_snippet = None
+
+            # Heuristic: Auto-correct AI error where end_snippet is part of snippet (now snippet_val).
+            if snippet_val and end_snippet and snippet_val.strip().endswith(end_snippet.strip()):
+                debug_print(debug, "HEURISTIC APPLIED", message="end_snippet is suffix of snippet. Treating as single snippet.")
+                end_snippet = None
+
             target_pos, error = None, {}
 
-            # Robustness: If range is defined, ignore the single snippet (AI often outputs both).
-            if start_snippet is not None and end_snippet is not None and snippet is not None:
-                 debug_print(debug, "ROBUSTNESS APPLIED", message="Both snippet and range locators present. Ignoring 'snippet' in favor of range.")
-                 snippet = None
+            # Logic: If end_snippet exists, it is a range operation starting at snippet_val.
+            # If only snippet_val exists, it is a point operation.
 
-            # Heuristic: Auto-correct AI error where end_snippet is part of start_snippet.
-            if start_snippet and end_snippet and start_snippet.strip().endswith(end_snippet.strip()):
-                debug_print(debug, "HEURISTIC APPLIED", message="end_snippet is suffix of start_snippet. Treating as single snippet.")
-                snippet = start_snippet
-                start_snippet, end_snippet = None, None
-
-            if snippet is not None:
-                target_pos, error = find_target_in_content(working_content, mod.get('anchor'), snippet, debug, last_mod_end_pos)
-            elif start_snippet is not None and end_snippet is not None:
+            if end_snippet is not None:
+                if snippet_val is None:
+                     return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Range requires 'snippet'."}})
                 if action not in ['REPLACE', 'DELETE']:
                     return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range."}})
-                start_pos_info, error = find_target_in_content(working_content, mod.get('anchor'), start_snippet, debug, last_mod_end_pos)
+
+                start_pos_info, error = find_target_in_content(working_content, mod.get('anchor'), snippet_val, debug, last_mod_end_pos)
                 if not error:
                     start_range_begin, start_range_end = start_pos_info
                     end_occurrences = smart_find(working_content[start_range_end:], end_snippet)
-                    if not end_occurrences: error = {"code": "END_SNIPPET_NOT_FOUND", "message": "End snippet not found.", "context": {"start_snippet": start_snippet, "end_snippet": end_snippet}}
+                    if not end_occurrences:
+                        error = {"code": "END_SNIPPET_NOT_FOUND", "message": "End snippet not found.", "context": {"snippet": snippet_val, "end_snippet": end_snippet}}
                     else:
                         end_range_begin_rel, end_range_end_rel = end_occurrences[0]
                         target_pos = (start_range_begin, start_range_end + end_range_end_rel)
+
+            elif snippet_val is not None:
+                 target_pos, error = find_target_in_content(working_content, mod.get('anchor'), snippet_val, debug, last_mod_end_pos)
+
             elif action != 'CREATE_FILE':
                 return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Modification requires locators."}})
 
@@ -415,14 +454,11 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 is_idempotency_skip = False
                 error_codes = ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND', 'END_SNIPPET_NOT_FOUND']
                 if action == 'DELETE' and error['code'] in error_codes:
-                    debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet to delete is already gone.", snippet=snippet or start_snippet); is_idempotency_skip = True
+                    debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet to delete is already gone.", snippet=snippet_val); is_idempotency_skip = True
                 if action == 'REPLACE' and error['code'] in error_codes:
                     content_pos, _ = find_target_in_content(working_content, mod.get('anchor'), content_to_add or "", debug=False)
-                    if content_pos: debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet not found, but replacement content exists.", snippet=snippet or start_snippet); is_idempotency_skip = True
-                if error['code'] == 'AMBIGUOUS_MATCH' and action == 'REPLACE':
-                     # If snippet is ambiguous, but one of the occurrences is ALREADY PATCHED (matches content),
-                     # we can assume the patch was partially applied or we are in a re-run state.
-                     pass # Todo: Implement advanced idempotency check for ambiguous matches.
+                    if content_pos: debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet not found, but replacement content exists.", snippet=snippet_val); is_idempotency_skip = True
+
                 if is_idempotency_skip: continue
 
                 report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
@@ -440,7 +476,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     return report_error(report)
 
             if action == 'CREATE_FILE': continue
-            last_mod_end_pos = target_pos[0] # Track approximate location for locality heuristic
+            last_mod_end_pos = target_pos[0]
             start_pos, end_pos = target_pos
 
             for key, val in [('include_leading_blank_lines', -1), ('include_trailing_blank_lines', 1)]:
@@ -468,16 +504,20 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 working_content = working_content[:start_pos] + working_content[end_pos:]
                 continue
 
-            first_char_pos = start_pos
-            while first_char_pos < len(working_content) and working_content[first_char_pos] in ' \t': first_char_pos += 1
-            line_start_idx = working_content.rfind(internal_newline, 0, first_char_pos) + 1
-            indentation = ""; # indentation = working_content[line_start_idx:first_char_pos]
+            indented_content = content_to_add or ""
+            if action in ['REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE'] and content_to_add:
+                line_start_pos = working_content.rfind(internal_newline, 0, start_pos) + 1
+                indentation = ""
+                for char in working_content[line_start_pos:start_pos]:
+                    if char in ' \t': indentation += char
+                    else: break
 
-            indented_content = ""
-            if content_to_add:
-                content_lines = content_to_add.splitlines()
-                indented_content = internal_newline.join(indentation + line for line in content_lines)
-                # Ensure trailing newline for inserts or if replacing a block that had one
+                debug_print(debug, "INDENTATION LOGIC", detected_indent=indentation)
+                if not content_to_add:
+                    indented_content = ""
+                else:
+                    lines = content_to_add.split(internal_newline)
+                    indented_content = internal_newline.join([indentation + line for line in lines])
                 original_had_trailing_newline = end_pos > start_pos and working_content[end_pos-1] == internal_newline
                 if action in ['INSERT_AFTER', 'INSERT_BEFORE'] or (action == 'REPLACE' and original_had_trailing_newline):
                     if not content_to_add.endswith('\n'):
@@ -493,33 +533,31 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 print(f"  + SUCCESS: Mod #{mod_idx + 1} ({action}) applied.")
 
         final_content = newline_char.join([line.rstrip(' \t') for line in working_content.split(internal_newline)])
-
-        if final_content != original_content:
+        if final_content != original_content or not file_existed:
             write_plan.append((file_path, final_content, relative_path))
 
-    if not write_plan and failed_changes_output: # All successful changes were no-ops, but some failed
+    if not write_plan and failed_changes_output:
         return {"status": "FAILED", "error": {"code": "MODIFICATION_FAILED", "message": "One or more modifications failed."}}
+
     if force and failed_changes_output:
         with open("afailed.ap", "w", encoding="utf-8") as f:
             f.write(f"# Summary: Failed changes from a forced patch application.\n\n")
             f.write(f"{patch_id_str} AP 3.0\n\n")
             for change_item in failed_changes_output:
                 f.write(f"{patch_id_str} FILE")
-                if change_item.get("newline"):
-                    f.write(f" {change_item['newline']}")
+                if change_item.get("newline"): f.write(f" {change_item['newline']}")
                 f.write(f"\n{change_item['file_path']}\n\n")
                 for mod_item in change_item['modifications']:
                     f.write(f"{patch_id_str} {mod_item['action']}\n")
-                    for key in ['anchor', 'snippet', 'start_snippet', 'end_snippet', 'content']:
-                        if key in mod_item:
-                            f.write(f"{patch_id_str} {key}\n{mod_item[key]}\n")
+                    for key in ['anchor', 'snippet', 'end_snippet', 'content']:
+                        if key in mod_item: f.write(f"{patch_id_str} {key}\n{mod_item[key]}\n")
                     for key in ['include_leading_blank_lines', 'include_trailing_blank_lines']:
-                        if key in mod_item:
-                            f.write(f"{patch_id_str} {key} {mod_item[key]}\n")
+                        if key in mod_item: f.write(f"{patch_id_str} {key} {mod_item[key]}\n")
                     f.write("\n")
         print(f"\nWARNING: Some changes failed and were written to afailed.ap")
         if not write_plan:
              return {"status": "FAILED", "error": {"code": "ALL_CHANGES_FAILED", "message": "All changes failed in force mode."}}
+
     if not dry_run:
         for f_path, f_content, r_path in write_plan:
             try:
@@ -539,11 +577,12 @@ if __name__ == '__main__':
     parser.add_argument("--dry-run", action="store_true", help="Show changes without modifying files.")
     parser.add_argument("-f", "--force", action="store_true", help="Force apply, skip atomicity and save failures to afailed.ap.")
     parser.add_argument("--json-report", action="store_true", help="Output machine-readable JSON on failure.")
+    parser.add_argument("--failure-report", help="Path to save a detailed JSON report on failure (includes context).")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging.")
     parser.add_argument("-v", "--version", action="version", version="ap patcher 3.0")
 
     args = parser.parse_args()
-    result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug, args.force)
+    result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug, args.force, args.failure_report)
 
     if args.json_report and result['status'] != 'SUCCESS':
         print(json.dumps(result, indent=2))

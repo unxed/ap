@@ -1,0 +1,13 @@
+# Test that explicit range with start AND end overrides conflicting snippet.
+34a00888 AP 3.0
+34a00888 FILE
+34_range_priority_strict.py
+34a00888 REPLACE
+34a00888 snippet
+GARBAGE THAT DOES NOT EXIST
+34a00888 snippet
+    # Start
+34a00888 end_snippet
+    # End
+34a00888 content
+    print("New")
