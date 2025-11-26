@@ -1,0 +1,32 @@
+# Summary: Test the locality heuristic.
+# The file has 3 identical methods. We update them sequentially.
+# The patcher should use the previous modification's position to pick the correct next anchor.
+
+30a00444 AP 3.0
+
+30a00444 FILE
+30_locality_heuristic.py
+
+30a00444 REPLACE
+30a00444 anchor
+    def process(self):
+30a00444 snippet
+return "Process One"
+30a00444 content
+        return "Process 1"
+
+30a00444 REPLACE
+30a00444 anchor
+    def process(self):
+30a00444 snippet
+return "Process Two"
+30a00444 content
+        return "Process 2"
+
+30a00444 REPLACE
+30a00444 anchor
+    def process(self):
+30a00444 snippet
+return "Process Three"
+30a00444 content
+        return "Process 3"

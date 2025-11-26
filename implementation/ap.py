@@ -34,6 +34,7 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
     current_modification = None
     reading_key = None
     value_lines = []
+    pending_args = None # To store args for delayed processing (e.g. CREATE_FILE)
 
     header_pattern = re.compile(r'^([a-z0-9]{8})\s+AP\s+3\.0$')
     directive_pattern = None
@@ -63,16 +64,32 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
                 end = len(value_lines)
                 while end > start and not value_lines[end - 1].strip(): end -= 1
                 value = "\n".join(value_lines[start:end])
-                if reading_key == "path" and current_file_change: current_file_change['file_path'] = value
-                elif current_modification: current_modification[reading_key] = value
-                reading_key, value_lines = None, []
+
+                if reading_key == "path" and current_file_change:
+                    current_file_change['file_path'] = value
+                elif reading_key == "CREATE_FILE_PATH":
+                    # Implicit file creation support
+                    if value:
+                        current_file_change = {'modifications': []}
+                        data['changes'].append(current_file_change)
+                        current_file_change['file_path'] = value
+                        if pending_args in {'LF', 'CRLF', 'CR'}: current_file_change['newline'] = pending_args
+
+                    if not current_file_change: raise ValueError(f"Action 'CREATE_FILE' on line {line_num} (prev) before FILE.")
+                    current_modification = {'action': 'CREATE_FILE'}
+                    current_file_change['modifications'].append(current_modification)
+                elif current_modification:
+                    current_modification[reading_key] = value
+
+                reading_key, value_lines, pending_args = None, [], None
 
             parts = match.group(1).strip().split(maxsplit=1)
             key, args = parts[0], parts[1] if len(parts) > 1 else None
 
-            ACTIONS = {'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE', 'CREATE_FILE'}
+            ACTIONS = {'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE'}
             VALUE_KEYS = {'snippet', 'anchor', 'content', 'start_snippet', 'end_snippet'}
             ARG_KEYS = {'include_leading_blank_lines', 'include_trailing_blank_lines'}
+            FILE_STARTERS = {'CREATE_FILE'} # Treated as hybrid Action/Value
             NEWLINE_VALS = {'LF', 'CRLF', 'CR'}
 
             if key == 'FILE':
@@ -84,6 +101,11 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
                 if not current_file_change: raise ValueError(f"Action '{key}' on line {line_num} before FILE.")
                 current_modification = {'action': key}
                 current_file_change['modifications'].append(current_modification)
+            elif key in FILE_STARTERS:
+                # Hybrid: acts as key-value (for path) AND action.
+                # Logic deferred to flush phase to check if value exists.
+                reading_key = 'CREATE_FILE_PATH'
+                pending_args = args
             elif key in VALUE_KEYS:
                 if args: raise ValueError(f"Directive '{key}' on line {line_num} takes no arguments.")
                 if key != 'path' and not current_modification: raise ValueError(f"'{key}' on line {line_num} outside modification.")
@@ -107,8 +129,20 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
         end = len(value_lines)
         while end > start and not value_lines[end - 1].strip(): end -= 1
         value = "\n".join(value_lines[start:end])
-        if reading_key == "path" and current_file_change: current_file_change['file_path'] = value
-        elif current_modification: current_modification[reading_key] = value
+
+        if reading_key == "path" and current_file_change:
+            current_file_change['file_path'] = value
+        elif reading_key == "CREATE_FILE_PATH":
+            if value:
+                current_file_change = {'modifications': []}
+                data['changes'].append(current_file_change)
+                current_file_change['file_path'] = value
+                if pending_args in {'LF', 'CRLF', 'CR'}: current_file_change['newline'] = pending_args
+            if not current_file_change: raise ValueError(f"Action 'CREATE_FILE' at end of file before FILE.")
+            current_modification = {'action': 'CREATE_FILE'}
+            current_file_change['modifications'].append(current_modification)
+        elif current_modification:
+            current_modification[reading_key] = value
 
     return data
 
@@ -161,7 +195,7 @@ def smart_find(content: str, snippet: str) -> List[Tuple[int, int]]:
                 occurrences.append((start_pos, end_pos))
     return occurrences
 
-def find_target_in_content(content: str, anchor: Optional[str], snippet: str, debug: bool = False) -> Tuple[Optional[Tuple[int, int]], Dict[str, Any]]:
+def find_target_in_content(content: str, anchor: Optional[str], snippet: str, debug: bool = False, last_match_end: int = 0) -> Tuple[Optional[Tuple[int, int]], Dict[str, Any]]:
     search_space, offset, anchor_found = content, 0, None
     if anchor:
         debug_print(debug, "ANCHOR SEARCH", anchor=anchor)
@@ -199,6 +233,13 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
 
                 if not is_shadowed:
                     valid_anchors.append((a_start, a_end))
+
+            # LOCALITY HEURISTIC: If still ambiguous, prefer anchors appearing after the last modification.
+            if len(valid_anchors) > 1 and last_match_end > 0:
+                forward_anchors = [a for a in valid_anchors if a[0] >= last_match_end]
+                if len(forward_anchors) == 1:
+                    valid_anchors = forward_anchors
+                    debug_print(debug, "ANCHOR RESOLVED (LOCALITY)", position=valid_anchors[0][0])
 
             if len(valid_anchors) == 1:
                 anchor_occurrences = valid_anchors
@@ -298,6 +339,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
         internal_newline = '\n'
         working_content = original_content.replace('\r\n', internal_newline).replace('\r', internal_newline)
+        last_mod_end_pos = 0
 
         for mod_idx, mod in enumerate(change.get('modifications', [])):
             action = mod.get('action')
@@ -333,11 +375,11 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 start_snippet, end_snippet = None, None
 
             if snippet is not None:
-                target_pos, error = find_target_in_content(working_content, mod.get('anchor'), snippet, debug)
+                target_pos, error = find_target_in_content(working_content, mod.get('anchor'), snippet, debug, last_mod_end_pos)
             elif start_snippet is not None and end_snippet is not None:
                 if action not in ['REPLACE', 'DELETE']:
                     return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range."}})
-                start_pos_info, error = find_target_in_content(working_content, mod.get('anchor'), start_snippet, debug)
+                start_pos_info, error = find_target_in_content(working_content, mod.get('anchor'), start_snippet, debug, last_mod_end_pos)
                 if not error:
                     start_range_begin, start_range_end = start_pos_info
                     end_occurrences = smart_find(working_content[start_range_end:], end_snippet)
@@ -356,6 +398,10 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 if action == 'REPLACE' and error['code'] in error_codes:
                     content_pos, _ = find_target_in_content(working_content, mod.get('anchor'), content_to_add or "", debug=False)
                     if content_pos: debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet not found, but replacement content exists.", snippet=snippet or start_snippet); is_idempotency_skip = True
+                if error['code'] == 'AMBIGUOUS_MATCH' and action == 'REPLACE':
+                     # If snippet is ambiguous, but one of the occurrences is ALREADY PATCHED (matches content),
+                     # we can assume the patch was partially applied or we are in a re-run state.
+                     pass # Todo: Implement advanced idempotency check for ambiguous matches.
                 if is_idempotency_skip: continue
 
                 report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
@@ -373,6 +419,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     return report_error(report)
 
             if action == 'CREATE_FILE': continue
+            last_mod_end_pos = target_pos[0] # Track approximate location for locality heuristic
             start_pos, end_pos = target_pos
 
             for key, val in [('include_leading_blank_lines', -1), ('include_trailing_blank_lines', 1)]:

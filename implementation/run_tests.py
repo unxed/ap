@@ -25,9 +25,12 @@ TESTS = [
     ("23_error_range_ambiguous", "negative", "AMBIGUOUS_MATCH"),
     ("24_heuristics", "positive", None),
     ("25_calculator_example", "positive", None),
+    ("26_implicit_create_file", "positive", None),
     ("27_anchor_resolution", "positive", None),
     ("28_mixed_locators", "positive", None),
     ("29_anchor_overlap", "positive", None),
+    ("30_locality_heuristic", "positive", None),
+    ("31_redundant_snippet", "positive", None),
 ]
 
 def get_paths(test_name):
@@ -53,10 +56,13 @@ def get_paths(test_name):
 "23_error_range_ambiguous": "23_error_range_ambiguous.py",
 "24_heuristics": "24_heuristics.py",
 "25_calculator_example": "25_calculator.py",
+"26_implicit_create_file": "dummy.txt",
 "27_anchor_resolution": "27_anchor_resolution.py",
 "28_mixed_locators": "28_mixed_locators.py",
 "29_anchor_overlap": "29_anchor_overlap.py",
 "26_indent_change": "26_indent_change.py",
+"30_locality_heuristic": "30_locality_heuristic.py",
+"31_redundant_snippet": "31_redundant_snippet.py",
     }
     src_filenames = file_map.get(test_name)
     if not src_filenames:
@@ -84,12 +90,17 @@ def run_positive_test(test_name, debug=False):
             return False
 
         # Compare as raw bytes to correctly validate line endings (LF vs CRLF).
-        actual_file_rel_path = "new/created_file.txt" if test_name == "13_create_file" else os.path.basename(src_file)
+        if test_name == "13_create_file":
+            actual_file_rel_path = "new/created_file.txt"
+        elif test_name == "26_implicit_create_file":
+            actual_file_rel_path = "26_implicit_create_file.txt"
+        else:
+            actual_file_rel_path = os.path.basename(src_file)
 
         with open(os.path.join(test_dir, actual_file_rel_path), 'rb') as f:
             actual_raw = f.read()
 
-        expected_file_path = os.path.join("expected", actual_file_rel_path) if test_name == "13_create_file" else expected_file
+        expected_file_path = os.path.join("expected", actual_file_rel_path) if test_name in ["13_create_file", "26_implicit_create_file"] else expected_file
         with open(expected_file_path, 'rb') as f:
             expected_raw = f.read()
 
