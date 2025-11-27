@@ -292,7 +292,41 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
     start_pos, end_pos = occurrences[0]
     return (start_pos + offset, end_pos + offset), {}
 
-def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_report: bool = False, debug: bool = False, force: bool = False, failure_report_path: str = None) -> Dict[str, Any]:
+def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_report: bool = False, debug: bool = False, force: bool = False, failure_report_path: str = None, create_failure_case: bool = False) -> Dict[str, Any]:
+    patch_content = ""
+    try:
+        with open(patch_file, 'r', encoding='utf-8') as f:
+            patch_content = f.read()
+    except (IOError, FileNotFoundError):
+        # Let parse_ap3_format handle the error reporting.
+        # patch_content will be empty, which is acceptable for the failure case report.
+        pass
+
+    def create_failure_case_file(filename: str, details: Dict[str, Any], original_content: Optional[str]):
+        """Creates a detailed log file for a failed patch application for debugging."""
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write("--- BEGIN ERROR DETAILS ---\n")
+                f.write(json.dumps(details, indent=2))
+                f.write("\n--- END ERROR DETAILS ---\n\n")
+
+                f.write("--- BEGIN ORIGINAL TARGET FILE CONTENT ---\n")
+                f.write(original_content or "[Original file content not available for this error type]")
+                if not (original_content or "").endswith('\n'):
+                    f.write('\n')
+                f.write("\n--- END ORIGINAL TARGET FILE CONTENT ---\n\n")
+
+                f.write("--- BEGIN FAILED PATCH FILE CONTENT ---\n")
+                f.write(patch_content)
+                if not patch_content.endswith('\n'):
+                    f.write('\n')
+                f.write("\n--- END FAILED PATCH FILE CONTENT ---\n")
+            if not json_report:
+                print(f"Created failure case report: {filename}")
+        except IOError as e:
+            if not json_report:
+                print(f"ERROR: Could not write failure case report to {filename}: {e}")
+
     def report_error(details):
         if failure_report_path:
             try:
@@ -339,7 +373,10 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
     try: data = parse_ap3_format(patch_file)
     except (ValueError, FileNotFoundError) as e:
-        return report_error({"status": "FAILED", "error": { "code": "INVALID_PATCH_FILE", "message": str(e) }})
+        err_details = {"status": "FAILED", "error": { "code": "INVALID_PATCH_FILE", "message": str(e) }}
+        if create_failure_case:
+            create_failure_case_file("afailed.log", err_details, None)
+        return report_error(err_details)
 
     patch_id_str = "00000000"
     try:
@@ -353,26 +390,38 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
     write_plan = []
 
     for change in data.get('changes', []):
-        if 'file_path' not in change: return report_error({"status": "FAILED", "error": {"code": "INVALID_PATCH_FILE", "message": "Missing 'file_path' for a change block."}})
+        if 'file_path' not in change:
+            err_details = {"status": "FAILED", "error": {"code": "INVALID_PATCH_FILE", "message": "Missing 'file_path' for a change block."}}
+            if create_failure_case:
+                create_failure_case_file("afailed.log", err_details, None)
+            return report_error(err_details)
         relative_path = change['file_path']
 
         real_project_dir = os.path.realpath(project_dir)
         real_file_path = os.path.realpath(os.path.join(project_dir, relative_path))
         if not real_file_path.startswith(os.path.join(real_project_dir, '')):
-            return report_error({"status": "FAILED", "file_path": relative_path, "error": {"code": "INVALID_FILE_PATH", "message": "Path traversal detected."}})
+            err_details = {"status": "FAILED", "file_path": relative_path, "error": {"code": "INVALID_FILE_PATH", "message": "Path traversal detected."}}
+            if create_failure_case:
+                create_failure_case_file("afailed.log", err_details, None)
+            return report_error(err_details)
 
         file_path = os.path.join(project_dir, relative_path)
         newline_mode = change.get('newline')
         newline_char = {'LF': '\n', 'CRLF': '\r\n', 'CR': '\r'}.get(newline_mode) or (detect_line_endings(file_path) if os.path.exists(file_path) else os.linesep)
         debug_print(debug, "PLANNING FOR FILE", file=file_path, newline_mode=newline_mode or "DETECTED", detected_newline=newline_char)
 
+        original_content = ""
         try:
             with open(file_path, 'r', encoding='utf-8', newline=None) as f: original_content = f.read()
             file_existed = True
         except FileNotFoundError:
             file_existed = False
             if any(mod.get('action') == 'CREATE_FILE' for mod in change.get('modifications', [])): original_content = ""
-            else: return report_error({"status": "FAILED", "file_path": relative_path, "error": { "code": "FILE_NOT_FOUND", "message": "Target file not found." }})
+            else:
+                err_details = {"status": "FAILED", "file_path": relative_path, "error": { "code": "FILE_NOT_FOUND", "message": "Target file not found." }}
+                if create_failure_case:
+                    create_failure_case_file("afailed.log", err_details, "") # File not found, content is empty
+                return report_error(err_details)
 
         internal_newline = '\n'
         working_content = original_content.replace('\r\n', internal_newline).replace('\r', internal_newline)
@@ -381,7 +430,11 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         for mod_idx, mod in enumerate(change.get('modifications', [])):
             action = mod.get('action')
             debug_print(debug, f"MODIFICATION #{mod_idx+1}", action=action)
-            if not action: return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "'action' is required."}})
+            if not action:
+                err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "'action' is required."}}
+                if create_failure_case:
+                    create_failure_case_file("afailed.log", err_details, original_content)
+                return report_error(err_details)
 
             content_to_add = mod.get('content', '')
 
@@ -401,7 +454,10 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         debug_print(debug, "OVERWRITE EMPTY", message="File exists but is empty. Overwriting.")
                         pass
                     else:
-                        return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "FILE_EXISTS", "message": "Target file exists and is not empty."}})
+                        err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "FILE_EXISTS", "message": "Target file exists and is not empty."}}
+                        if create_failure_case:
+                            create_failure_case_file("afailed.log", err_details, original_content)
+                        return report_error(err_details)
 
                 working_content = (content_to_add or "").replace('\r\n', internal_newline).replace('\r', internal_newline)
                 break
@@ -430,9 +486,15 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
             if end_snippet is not None:
                 if snippet_val is None:
-                     return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Range requires 'snippet'."}})
+                    err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Range requires 'snippet'."}}
+                    if create_failure_case:
+                        create_failure_case_file("afailed.log", err_details, original_content)
+                    return report_error(err_details)
                 if action not in ['REPLACE', 'DELETE']:
-                    return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range."}})
+                    err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range."}}
+                    if create_failure_case:
+                        create_failure_case_file("afailed.log", err_details, original_content)
+                    return report_error(err_details)
 
                 start_pos_info, error = find_target_in_content(working_content, mod.get('anchor'), snippet_val, debug, last_mod_end_pos)
                 if not error:
@@ -448,7 +510,10 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                  target_pos, error = find_target_in_content(working_content, mod.get('anchor'), snippet_val, debug, last_mod_end_pos)
 
             elif action != 'CREATE_FILE':
-                return report_error({"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Modification requires locators."}})
+                err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Modification requires locators."}}
+                if create_failure_case:
+                    create_failure_case_file("afailed.log", err_details, original_content)
+                return report_error(err_details)
 
             if error:
                 is_idempotency_skip = False
@@ -465,6 +530,8 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 report['error']['context']['action'] = action
                 if force:
                     print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action')}) in '{relative_path}'. Reason: {error.get('message')}")
+                    if create_failure_case:
+                        create_failure_case_file(f"afailed.{mod_idx}.log", report, original_content)
                     failed_file_block = next((item for item in failed_changes_output if item.get('file_path') == relative_path), None)
                     if not failed_file_block:
                         failed_file_block = {'file_path': relative_path, 'modifications': []}
@@ -473,6 +540,8 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     failed_file_block['modifications'].append(mod)
                     continue
                 else:
+                    if create_failure_case:
+                        create_failure_case_file("afailed.log", report, original_content)
                     return report_error(report)
 
             if action == 'CREATE_FILE': continue
@@ -564,7 +633,14 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 debug_print(debug, "WRITING FILE", path=f_path, content_len=len(f_content))
                 os.makedirs(os.path.dirname(f_path) or '.', exist_ok=True)
                 with open(f_path, 'w', encoding='utf-8', newline='' if newline_mode else None) as f: f.write(f_content)
-            except IOError as e: return report_error({"status": "FAILED", "file_path": r_path, "error": {"code": "FILE_WRITE_ERROR", "message": str(e)}})
+            except IOError as e:
+                err_details = {"status": "FAILED", "file_path": r_path, "error": {"code": "FILE_WRITE_ERROR", "message": str(e)}}
+                if create_failure_case:
+                    # We can't know which original_content this write corresponds to without more tracking.
+                    # Best effort: use the last known original_content. This is an edge case.
+                    create_failure_case_file("afailed.log", err_details, original_content if 'original_content' in locals() else None)
+                return report_error(err_details)
+
     elif write_plan: debug_print(debug, "DRY RUN: SKIPPING WRITE", num_files=len(write_plan))
     else: debug_print(debug, "NO CHANGES: SKIPPING WRITE")
 
@@ -578,11 +654,12 @@ if __name__ == '__main__':
     parser.add_argument("-f", "--force", action="store_true", help="Force apply, skip atomicity and save failures to afailed.ap.")
     parser.add_argument("--json-report", action="store_true", help="Output machine-readable JSON on failure.")
     parser.add_argument("--failure-report", help="Path to save a detailed JSON report on failure (includes context).")
+    parser.add_argument("--create-failure-case", action="store_true", help="On failure, create afailed.log (or afailed.<mod_idx>.log with --force) with full context for debugging.")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging.")
     parser.add_argument("-v", "--version", action="version", version="ap patcher 3.0")
 
     args = parser.parse_args()
-    result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug, args.force, args.failure_report)
+    result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug, args.force, args.failure_report, args.create_failure_case)
 
     if args.json_report and result['status'] != 'SUCCESS':
         print(json.dumps(result, indent=2))
