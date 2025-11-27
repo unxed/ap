@@ -1,0 +1,9 @@
+# Summary: Test that creating a file fails if a directory with that name exists.
+59e22059 AP 3.1
+
+59e22059 FILE
+59_a_directory
+
+59e22059 CREATE
+59e22059 content
+This content should fail to write.

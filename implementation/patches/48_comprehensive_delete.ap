@@ -1,0 +1,28 @@
+# Summary: This patch tests all three DELETE variants simultaneously.
+#
+# Plan:
+#   1. Delete a function block from 48_source.py.
+#   2. Delete the entire file 48_file_to_delete.txt.
+#   3. Delete the entire directory 48_dir_to_delete.
+
+test0048 AP 3.1
+
+test0048 FILE
+48_source.py
+
+test0048 DELETE
+test0048 snippet
+def function_to_delete():
+    """This function will be removed."""
+    pass
+test0048 include_leading_blank_lines 2
+
+test0048 FILE
+48_file_to_delete.txt
+
+test0048 DELETE
+
+test0048 FILE
+48_dir_to_delete
+
+test0048 DELETE

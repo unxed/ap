@@ -1,0 +1,23 @@
+# Summary: This test ensures that a file block with a valid action and an
+# invalid, snippet-less DELETE action fails correctly and atomically.
+#
+# Plan:
+#  1. Define a valid REPLACE for a line in the source file.
+#  2. Add a `DELETE` action without a snippet to the same file block.
+#  3. The patcher should fail with INVALID_MODIFICATION because the second action
+#     is incomplete. Crucially, it must NOT interpret this as a file deletion,
+#     and due to atomicity, the first valid change should NOT be applied.
+
+t3st0047 AP 3.1
+
+t3st0047 FILE
+47_atomic_delete_source.txt
+
+t3st0047 REPLACE
+t3st0047 snippet
+Line to change.
+t3st0047 content
+This change should not be applied.
+
+# This malformed action should cause the whole patch to fail.
+t3st0047 DELETE

@@ -1,0 +1,12 @@
+# Summary: Failed changes from a forced patch application.
+
+AABB1122 AP 3.1
+
+AABB1122 FILE
+52_atomic_src2.txt
+
+AABB1122 REPLACE
+AABB1122 snippet
+This snippet does not exist.
+AABB1122 content
+This change will fail.

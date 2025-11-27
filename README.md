@@ -62,7 +62,7 @@ You attach the .ap format spec ([ap.md](ap.md) from this repository) to your pro
 #   1. In `greeter.py`, replace the "Hello, world!" string with
 #      "Hello, AI-powered world!".
 
-f0cacc1a AP 3.0
+f0cacc1a AP 3.1
 
 f0cacc1a FILE
 greeter.py

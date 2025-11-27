@@ -3,7 +3,7 @@
 #   1. In `02_sequences.py`, insert a new import statement after `import os`.
 #   2. In the same file, delete the `deprecated_method`.
 
-a22e6b0f AP 3.0
+a22e6b0f AP 3.1
 
 a22e6b0f FILE
 02_sequences.py

@@ -1,6 +1,6 @@
 # Test overwrite of empty file.
-35a00999 AP 3.0
-35a00999 CREATE_FILE
+35a00999 AP 3.1
+35a00999 CREATE
 35_safe_create_empty.txt
 35a00999 content
 Filled.

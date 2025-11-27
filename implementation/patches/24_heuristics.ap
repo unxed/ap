@@ -3,7 +3,7 @@
 #  1. Test hybrid "suffix" search by targeting a line with a numbered prefix.
 #  2. Test range auto-correction where snippet_tail is part of snippet.
 
-24e41571 AP 3.0
+24e41571 AP 3.1
 
 24e41571 FILE
 24_heuristics.py

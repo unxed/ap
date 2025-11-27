@@ -1,0 +1,15 @@
+# Summary: Tests that existing CRLF line endings are preserved.
+# Plan:
+#   1. In `54_crlf.txt`, replace a line. Do not specify a newline option.
+#   2. The test runner will verify the output file still has CRLF endings.
+
+54c21f54 AP 3.1
+
+54c21f54 FILE
+54_crlf.txt
+
+54c21f54 REPLACE
+54c21f54 snippet
+Line 2
+54c21f54 content
+The second line was changed.

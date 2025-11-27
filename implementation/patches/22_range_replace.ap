@@ -3,7 +3,7 @@
 #   1. In `22_range_replace.py`, replace the block from "Stage 2" to the
 #      calculation of `result` using `snippet` and `snippet_tail`.
 
-222a48e1 AP 3.0
+222a48e1 AP 3.1
 
 222a48e1 FILE
 22_range_replace.py

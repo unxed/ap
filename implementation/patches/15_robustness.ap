@@ -3,10 +3,16 @@
 #   1. In `15_robustness.js`, replace a `setting` line only within the `unsafeConfig` block.
 #   2. Replace a comment containing various special characters.
 
-1520b057 AP 3.0
+1520b057 AP 3.1
 
 1520b057 FILE
 15_robustness.js
+
+1520b057 REPLACE
+1520b057 snippet
+// Special chars: &*{}[]
+1520b057 content
+    // All special characters handled correctly
 
 1520b057 REPLACE
 1520b057 anchor
@@ -15,9 +21,3 @@ const unsafeConfig = {
 setting: "default" // This one SHOULD be changed
 1520b057 content
         setting: "overridden" // Changed safely within anchor
-
-1520b057 REPLACE
-1520b057 snippet
-// Special chars: &*{}[]
-1520b057 content
-    // All special characters handled correctly

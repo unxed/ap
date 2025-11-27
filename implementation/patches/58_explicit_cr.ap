@@ -1,0 +1,14 @@
+# Summary: Tests that `FILE CR` forces CR line endings.
+# Plan:
+#   1. In `58_explicit_cr.txt`, replace a line. The output file must use CR endings.
+
+58c21c20 AP 3.1
+
+58c21c20 FILE CR
+58_explicit_cr.txt
+
+58c21c20 REPLACE
+58c21c20 snippet
+Line 2 to change.
+58c21c20 content
+The new line.

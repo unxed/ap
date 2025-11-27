@@ -4,7 +4,7 @@
 #   2. Insert an empty string after another line (a no-op).
 #   3. Delete a third line.
 
-16e3971e AP 3.0
+16e3971e AP 3.1
 
 16e3971e FILE
 16_empty_actions.txt

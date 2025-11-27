@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os, sys, shutil, tempfile, difflib, json, argparse, hashlib
+from os.path import isdir, isfile, join
 from ap import apply_patch
 
 TESTS = [
@@ -41,6 +42,25 @@ TESTS = [
     ("39_sequential_repeats", "positive", None),
     ("40_unified_snippet", "positive", None),
     ("41_indent_trailing_newline", "positive", None),
+    ("42_strict_cursor", "negative", "SNIPPET_NOT_FOUND"),
+    ("43_heuristic_implicit_create", "positive", None),
+    ("44_rename", "positive", None),
+    ("45_create_dir", "positive", None),
+    ("46_delete_file_dir", "positive", None),
+    ("47_error_mixed_atomic_delete", "negative", "INVALID_MODIFICATION"),
+    ("48_comprehensive_delete", "positive", None),
+    ("49_sequential_cursor", "positive", None),
+    ("50_identical_snippet_tail", "positive", None),
+    ("51_rename_create_dir", "positive", None),
+    ("52_force_success_part", "positive", None),
+    ("53_force_fail_report", "negative", "SNIPPET_NOT_FOUND"),
+    ("54_crlf_preservation", "positive", None),
+    ("55_rename_idempotency", "positive", None),
+    ("56_insert_noop", "positive", None),
+    ("57_explicit_lf", "positive", None),
+    ("58_explicit_cr", "positive", None),
+    ("59_error_create_file_on_dir", "negative", "FILE_WRITE_ERROR"),
+    ("60_idempotent_create", "positive", None),
 ]
 
 def get_paths(test_name):
@@ -83,6 +103,25 @@ def get_paths(test_name):
         "39_sequential_repeats": "39_sequential_repeats.py",
         "40_unified_snippet": "40_unified_snippet.py",
         "41_indent_trailing_newline": "41_indent_trailing_newline.py",
+        "42_strict_cursor": "42_strict_cursor.py",
+        "43_heuristic_implicit_create": "dummy.txt",
+        "44_rename": ["44_rename_src.txt", "44_rename_dir"],
+        "45_create_dir": "dummy.txt",
+        "46_delete_file_dir": ["to_be_deleted.txt", "to_be_deleted_dir"],
+        "47_error_mixed_atomic_delete": "47_atomic_delete_source.txt",
+        "48_comprehensive_delete": ["48_source.py", "48_file_to_delete.txt", "48_dir_to_delete"],
+        "49_sequential_cursor": "49_sequential_cursor.py",
+        "50_identical_snippet_tail": "50_identical_snippet_tail.py",
+        "51_rename_create_dir": "51_rename_create_dir.txt",
+        "52_force_success_part": ["52_atomic_src1.txt", "52_atomic_src2.txt"],
+        "53_force_fail_report": ["52_atomic_src1.txt", "52_atomic_src2.txt"],
+        "54_crlf_preservation": "54_crlf.txt",
+        "55_rename_idempotency": "55_rename_src.txt",
+        "56_insert_noop": "56_insert_noop.txt",
+        "57_explicit_lf": "57_explicit_lf.txt",
+        "58_explicit_cr": "58_explicit_cr.txt",
+        "59_error_create_file_on_dir": "59_a_directory",
+        "60_idempotent_create": "60_idempotent_create.txt",
     }
     src_filenames = file_map.get(test_name)
     if not src_filenames:
@@ -92,53 +131,134 @@ def get_paths(test_name):
         src_filenames = [src_filenames]
 
     src_paths = [os.path.join("src", fname) for fname in src_filenames]
+
     primary_expected_path = os.path.join("expected", src_filenames[0])
 
     return src_paths, patch_file, primary_expected_path
 
 def run_positive_test(test_name, debug=False):
     src_files, patch_file, expected_file = get_paths(test_name)
-    src_file = src_files[0]
+    src_file = src_files[0] if src_files else None
     test_dir = tempfile.mkdtemp()
     try:
         if debug: print(f"\n{'='*20} RUNNING POSITIVE TEST: {test_name} {'='*20}")
-        shutil.copy(src_file, os.path.join(test_dir, os.path.basename(src_file)))
 
-        # Special setup for implicit file creation / overwrite tests
+        for src_path in src_files:
+            if not os.path.exists(src_path): continue
+            dest_path = os.path.join(test_dir, os.path.basename(src_path))
+            if os.path.isdir(src_path):
+                shutil.copytree(src_path, dest_path)
+            else:
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                shutil.copy(src_path, dest_path)
+
         if test_name == "35_safe_create_empty":
-             # Ensure the file exists but is empty (create programmatically to avoid asset issues)
              with open(os.path.join(test_dir, os.path.basename(src_file)), 'w') as f: pass
-        else:
-             shutil.copy(src_file, os.path.join(test_dir, os.path.basename(src_file)))
+        if test_name == "54_crlf_preservation":
+            src_in_test_dir = os.path.join(test_dir, os.path.basename(src_file))
+            with open(src_in_test_dir, 'rb') as f:
+                content = f.read()
+            with open(src_in_test_dir, 'wb') as f:
+                f.write(content.replace(b'\n', b'\r\n'))
+        if test_name == "55_rename_idempotency":
+            # Set up the special idempotency case: source does not exist, but destination does.
+            src_in_test_dir = os.path.join(test_dir, os.path.basename(src_file))
+            dest_in_test_dir = os.path.join(test_dir, "55_renamed.txt")
 
+            with open(dest_in_test_dir, 'w') as f: f.write("This file exists.")
+            if os.path.exists(src_in_test_dir):
+                os.remove(src_in_test_dir)
+
+            report = apply_patch(patch_file=patch_file, project_dir=test_dir, debug=debug)
+
+            if report.get("status") == "SUCCESS" and not os.path.exists(src_in_test_dir) and os.path.exists(dest_in_test_dir):
+                print(f"✅ PASSED: {test_name}"); return True
+            else:
+                print(f"❌ FAILED: {test_name}. Idempotency check failed."); return False
+
+        force_apply = test_name == "52_force_success_part"
         report = apply_patch(patch_file=patch_file, project_dir=test_dir, debug=debug)
 
-        if report.get("status") != "SUCCESS":
+        if not force_apply and report.get("status") != "SUCCESS":
             print(f"❌ FAILED: {test_name}. Patcher errored on a valid patch: {report.get('error')}")
             return False
 
+        if test_name == "44_rename":
+            renamed_file, renamed_dir = join(test_dir, "44_renamed.txt"), join(test_dir, "44_renamed_dir")
+            original_file, original_dir = join(test_dir, "44_rename_src.txt"), join(test_dir, "44_rename_dir")
+            file_renamed, dir_renamed = isfile(renamed_file) and not os.path.exists(original_file), isdir(renamed_dir) and not os.path.exists(original_dir)
+            if file_renamed and dir_renamed: print(f"✅ PASSED: {test_name}"); return True
+            else: print(f"❌ FAILED: {test_name}. Rename op failed (file: {file_renamed}, dir: {dir_renamed})."); return False
+
+        if test_name == "45_create_dir":
+            if isdir(join(test_dir, "new_dir/")): print(f"✅ PASSED: {test_name}"); return True
+            else: print(f"❌ FAILED: {test_name}. Directory creation failed."); return False
+
+        if test_name == "46_delete_file_dir":
+            deleted_file, deleted_dir = join(test_dir, "to_be_deleted.txt"), join(test_dir, "to_be_deleted_dir")
+            if not os.path.exists(deleted_file) and not os.path.exists(deleted_dir): print(f"✅ PASSED: {test_name}"); return True
+            else: print(f"❌ FAILED: {test_name}. Deletion failed (file_exists: {os.path.exists(deleted_file)}, dir_exists: {os.path.exists(deleted_dir)})."); return False
+
+        if test_name == "51_rename_create_dir":
+            renamed_file, original_file = join(test_dir, "new_parent_dir/renamed.txt"), join(test_dir, "51_rename_create_dir.txt")
+            if isfile(renamed_file) and not os.path.exists(original_file): print(f"✅ PASSED: {test_name}"); return True
+            else: print(f"❌ FAILED: {test_name}. Rename with dir creation failed."); return False
+
         if test_name == "13_create_file": actual_file_rel_path = "new/created_file.txt"
         elif test_name == "26_implicit_create_file": actual_file_rel_path = "26_implicit_create_file.txt"
+        elif test_name == "43_heuristic_implicit_create": actual_file_rel_path = "43_created.txt"
         else: actual_file_rel_path = os.path.basename(src_file)
 
-        with open(os.path.join(test_dir, actual_file_rel_path), 'rb') as f:
-            actual_raw = f.read()
+        actual_file_path = os.path.join(test_dir, actual_file_rel_path)
+        if not os.path.exists(actual_file_path):
+            print(f"❌ FAILED: {test_name}. Expected output file '{actual_file_rel_path}' not found."); return False
 
-        expected_file_path = os.path.join("expected", actual_file_rel_path) if test_name in ["13_create_file", "26_implicit_create_file"] else expected_file
-        with open(expected_file_path, 'rb') as f:
-            expected_raw = f.read()
+        with open(actual_file_path, 'rb') as f: actual_raw = f.read()
+
+        expected_file_path = os.path.join("expected", actual_file_rel_path) if test_name in ["13_create_file", "26_implicit_create_file", "43_heuristic_implicit_create"] else expected_file
+        with open(expected_file_path, 'rb') as f: expected_raw = f.read()
 
         if actual_raw == expected_raw:
             print(f"✅ PASSED: {test_name}"); return True
         else:
             print(f"❌ FAILED: {test_name}. Output does not match expected result.")
-            actual = actual_raw.decode('utf-8', 'replace')
-            expected = expected_raw.decode('utf-8', 'replace')
-            diff = difflib.unified_diff(
-                expected.splitlines(keepends=True), actual.splitlines(keepends=True),
-                fromfile=expected_file_path, tofile="actual_result"
-            )
+            actual, expected = actual_raw.decode('utf-8', 'replace'), expected_raw.decode('utf-8', 'replace')
+            diff = difflib.unified_diff(expected.splitlines(keepends=True), actual.splitlines(keepends=True), fromfile=expected_file_path, tofile="actual_result")
             print("--- DIFF ---\n" + ''.join(diff)); return False
+    finally:
+        shutil.rmtree(test_dir)
+def run_force_test(test_name, debug=False):
+    src_files, patch_file, expected_file = get_paths(test_name)
+    test_dir = tempfile.mkdtemp()
+    output_capture = io.StringIO()
+    try:
+        if debug: print(f"\n{'='*20} RUNNING FORCE TEST: {test_name} {'='*20}")
+
+        for src_path in src_files:
+            if os.path.exists(src_path):
+                shutil.copy(src_path, os.path.join(test_dir, os.path.basename(src_path)))
+
+        with contextlib.redirect_stdout(output_capture), contextlib.redirect_stderr(output_capture):
+            apply_patch(patch_file=patch_file, project_dir=test_dir, force=True, debug=debug)
+
+        afailed_path = os.path.join(test_dir, "afailed.ap")
+        if not os.path.exists(afailed_path):
+            print(f"❌ FAILED: {test_name}. afailed.ap was not created.")
+            print("--- CAPTURED OUTPUT ---\n" + output_capture.getvalue())
+            return False
+
+        with open(afailed_path, 'r', encoding='utf-8') as f_actual, \
+             open(expected_file, 'r', encoding='utf-8') as f_expected:
+            actual_content, expected_content = f_actual.read(), f_expected.read()
+            if actual_content.strip() != expected_content.strip():
+                print(f"❌ FAILED: {test_name}. afailed.ap content does not match expected.")
+                diff = difflib.unified_diff(expected_content.splitlines(keepends=True), actual_content.splitlines(keepends=True), fromfile=expected_file, tofile="actual_afailed.ap")
+                print("--- DIFF ---\n" + ''.join(diff))
+                print("--- CAPTURED OUTPUT ---\n" + output_capture.getvalue())
+                return False
+
+        print(f"✅ PASSED: {test_name} (Correctly reported failure)")
+        return True
     finally:
         shutil.rmtree(test_dir)
 
@@ -152,9 +272,12 @@ def run_negative_test(test_name, expected_code, debug=False):
         for src_path in source_files:
             if os.path.exists(src_path):
                 dest_path = os.path.join(test_dir, os.path.basename(src_path))
-                shutil.copy(src_path, dest_path)
-                with open(dest_path, 'rb') as f:
-                    initial_hashes[os.path.basename(src_path)] = hashlib.md5(f.read()).hexdigest()
+                if os.path.isdir(src_path):
+                    shutil.copytree(src_path, dest_path)
+                else:
+                    shutil.copy(src_path, dest_path)
+                    with open(dest_path, 'rb') as f:
+                        initial_hashes[os.path.basename(src_path)] = hashlib.md5(f.read()).hexdigest()
 
         # Test failure reporting file creation
         fail_report_path = os.path.join(test_dir, "failure.json")
@@ -196,8 +319,10 @@ def main():
         try:
             if type == "positive":
                 results.append(run_positive_test(name, debug=args.debug))
-            else:
+            elif type == "negative":
                 results.append(run_negative_test(name, code, debug=args.debug))
+            elif type == "force":
+                results.append(run_force_test(name, code, debug=args.debug))
         except Exception as e:
             print(f"❌ CRITICAL FAILURE in test '{name}': {e}"); results.append(False)
 

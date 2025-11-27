@@ -1,5 +1,5 @@
 # Test intersection resolution: Duplicate anchor, unique snippet.
-32a00666 AP 3.0
+32a00666 AP 3.1
 32a00666 FILE
 32_intersection_resolution.py
 32a00666 REPLACE

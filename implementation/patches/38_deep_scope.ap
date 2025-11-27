@@ -1,7 +1,7 @@
 # Test Deep Scope Resolution:
 # The anchor "def handle(self):" appears 3 times.
 # We want to change the one that returns 2.
-t3st0038 AP 3.0
+t3st0038 AP 3.1
 t3st0038 FILE
 38_deep_scope.py
 t3st0038 REPLACE

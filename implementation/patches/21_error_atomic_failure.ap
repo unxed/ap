@@ -4,7 +4,7 @@
 #   2. Define an invalid change (snippet not found) for `21_atomic_src2.txt`.
 #      The entire operation must fail, and `21_atomic_src1.txt` must remain untouched.
 
-21a7031c AP 3.0
+21a7031c AP 3.1
 
 21a7031c FILE
 21_atomic_src1.txt

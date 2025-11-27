@@ -1,9 +1,9 @@
-# Summary: Test implicit file creation (CREATE_FILE with value, no FILE directive).
+# Summary: Test implicit file creation (CREATE with value, no FILE directive).
 # This validates the new robustness feature.
 
-26a03677 AP 3.0
+26a03677 AP 3.1
 
-26a03677 CREATE_FILE
+26a03677 CREATE
 26_implicit_create_file.txt
 
 26a03677 content

@@ -3,7 +3,7 @@
 #   1. In `08_error_src.py`, attempt to replace a line that does not exist.
 #      The patch should fail with a SNIPPET_NOT_FOUND error.
 
-08e22021 AP 3.0
+08e22021 AP 3.1
 
 08e22021 FILE
 08_error_src.py

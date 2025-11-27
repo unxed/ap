@@ -1,0 +1,18 @@
+# Summary: Tests afailed.ap generation on a partial failure with --force.
+# This patch uses an ID with uppercase letters to test the fix.
+# Plan:
+#   1. Apply a valid change to 52_atomic_src1.txt.
+#   2. Attempt an invalid change in 52_atomic_src2.txt.
+#   3. The test runner will verify that the first change was applied and
+#      afailed.ap was created with the correct content and header.
+
+AABB1122 AP 3.1
+
+AABB1122 FILE
+52_atomic_src1.txt
+
+AABB1122 REPLACE
+AABB1122 snippet
+Change this line.
+AABB1122 content
+This line should be changed.

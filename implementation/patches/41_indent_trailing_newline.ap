@@ -1,5 +1,5 @@
 # Summary: Test that trailing newlines in content are correctly indented.
-t3st0041 AP 3.0
+t3st0041 AP 3.1
 
 t3st0041 FILE
 41_indent_trailing_newline.py

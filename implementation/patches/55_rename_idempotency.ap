@@ -1,0 +1,12 @@
+# Summary: Tests idempotency of RENAME.
+# Plan:
+#   1. Attempt to rename a non-existent file to an existing one.
+#   2. The patcher should succeed with no changes.
+
+552e4a31 AP 3.1
+
+552e4a31 FILE
+55_rename_src.txt
+
+552e4a31 RENAME
+55_renamed.txt

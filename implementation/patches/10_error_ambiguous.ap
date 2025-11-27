@@ -3,7 +3,7 @@
 #   1. In `10_error_src.py`, attempt to replace a line that appears twice.
 #      The patch should fail with an AMBIGUOUS_MATCH error.
 
-10e22023 AP 3.0
+10e22023 AP 3.1
 
 10e22023 FILE
 10_error_src.py

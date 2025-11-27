@@ -1,0 +1,12 @@
+# Test for file and directory deletion
+t3st0046 AP 3.1
+
+t3st0046 FILE
+to_be_deleted.txt
+
+t3st0046 DELETE
+
+t3st0046 FILE
+to_be_deleted_dir
+
+t3st0046 DELETE

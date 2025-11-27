@@ -1,0 +1,14 @@
+# Summary: Tests that `FILE LF` forces LF line endings.
+# Plan:
+#   1. In `57_explicit_lf.txt`, replace a line of text. The output file should use LF.
+
+57e1f1f0 AP 3.1
+
+57e1f1f0 FILE LF
+57_explicit_lf.txt
+
+57e1f1f0 REPLACE
+57e1f1f0 snippet
+Line 2 to be changed.
+57e1f1f0 content
+This line was changed.

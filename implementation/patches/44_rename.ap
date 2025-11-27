@@ -1,0 +1,18 @@
+# Summary: Tests the RENAME action for both a file and a directory.
+# Plan:
+#   1. Rename `44_rename_src.txt` to `44_renamed.txt`.
+#   2. Rename the directory `44_rename_dir` to `44_renamed_dir`.
+
+t3st0044 AP 3.1
+
+t3st0044 FILE
+44_rename_src.txt
+
+t3st0044 RENAME
+44_renamed.txt
+
+t3st0044 FILE
+44_rename_dir
+
+t3st0044 RENAME
+44_renamed_dir

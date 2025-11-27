@@ -3,7 +3,7 @@
 #   1. In `06_short_anchor.py`, replace `return x * x` specifically within the `square` function,
 #      leaving other identical lines unchanged.
 
-06a4c402 AP 3.0
+06a4c402 AP 3.1
 
 06a4c402 FILE
 06_short_anchor.py

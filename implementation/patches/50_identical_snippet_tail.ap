@@ -1,0 +1,19 @@
+# Summary: Tests the heuristic for identical snippet and snippet_tail.
+# The AI erroneously copied the whole block into both locators.
+# The patcher should correct this and perform a simple replace.
+
+c505050a AP 3.1
+
+c505050a FILE
+50_identical_snippet_tail.py
+
+c505050a REPLACE
+c505050a snippet
+def function_to_replace():
+    print("Old implementation")
+c505050a snippet_tail
+def function_to_replace():
+    print("Old implementation")
+c505050a content
+def function_to_replace():
+    print("New implementation")

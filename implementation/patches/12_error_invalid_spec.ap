@@ -3,7 +3,7 @@
 #   1. This patch file is missing an ACTION directive before `snippet`.
 #      The patch should fail with an INVALID_PATCH_FILE error.
 
-12e22025 AP 3.0
+12e22025 AP 3.1
 
 12e22025 FILE
 dummy.txt

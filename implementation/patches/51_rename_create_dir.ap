@@ -1,0 +1,13 @@
+# Summary: Tests that RENAME creates parent directories.
+# Plan:
+#   1. Rename `51_rename_create_dir.txt` to a path inside a non-existent
+#      directory (`new_parent_dir/renamed.txt`).
+#      The patcher should create `new_parent_dir` and move the file.
+
+test0051 AP 3.1
+
+test0051 FILE
+51_rename_create_dir.txt
+
+test0051 RENAME
+new_parent_dir/renamed.txt

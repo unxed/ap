@@ -1,5 +1,5 @@
 # Test sequential patching of duplicate lines using locality.
-33a00777 AP 3.0
+33a00777 AP 3.1
 33a00777 FILE
 33_snippet_locality.py
 33a00777 REPLACE

@@ -1,0 +1,28 @@
+# Summary: Tests the corrected sequential cursor logic.
+#
+# Plan:
+#   1. Replace the first "process_data" block, making it shorter.
+#   2. Replace the second "process_data" block. Without the fix, the patcher
+#      would fail to find the second block because the cursor wouldn't advance
+#      past the first modification correctly.
+
+c495049a AP 3.1
+
+c495049a FILE
+49_sequential_cursor.py
+
+c495049a REPLACE
+c495049a snippet
+# Start block
+    process_data(item)
+    # End block
+c495049a content
+    process_data_as_a(item)
+
+c495049a REPLACE
+c495049a snippet
+# Start block
+    process_data(item)
+    # End block
+c495049a content
+    process_data_as_b(item)

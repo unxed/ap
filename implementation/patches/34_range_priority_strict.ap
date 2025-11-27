@@ -1,5 +1,5 @@
 # Test that explicit range with start AND end overrides conflicting snippet.
-34a00888 AP 3.0
+34a00888 AP 3.1
 34a00888 FILE
 34_range_priority_strict.py
 34a00888 REPLACE

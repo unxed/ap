@@ -3,4 +3,4 @@
 #   1. This patch file is deliberately malformed with an invalid ID in the header.
 #      The patch should fail with an INVALID_PATCH_FILE error.
 
-badhead AP 3.0
+badhead AP 3.1

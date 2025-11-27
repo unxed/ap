@@ -2,7 +2,7 @@
 # AI often outputs a 'snippet' that is just a copy of 'snippet' or part of the block.
 # This should NOT fail ambiguity or not-found checks.
 
-31a00555 AP 3.0
+31a00555 AP 3.1
 
 31a00555 FILE
 31_redundant_snippet.py

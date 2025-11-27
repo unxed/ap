@@ -3,7 +3,7 @@
 #   1. In `18_idempotency.py`, perform a series of changes (INSERT, REPLACE, DELETE).
 #      The test runner will apply this patch twice to ensure the second run is a clean no-op.
 
-181de390 AP 3.0
+181de390 AP 3.1
 
 181de390 FILE
 18_idempotency.py

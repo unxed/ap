@@ -2,7 +2,7 @@
 # The AI erroneously put the NEW value in snippet_tail.
 # The patcher should ignore snippet_tail and just replace "timeout = 10".
 
-37a00bbb AP 3.0
+37a00bbb AP 3.1
 
 37a00bbb FILE
 37_heuristic_end_eq_content.py

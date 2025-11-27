@@ -2,7 +2,7 @@
 # Note: "def update(self):" appears twice. The patcher must use the snippet "self.value = 20"
 # to figure out we mean ConfigB.
 
-27a00111 AP 3.0
+27a00111 AP 3.1
 
 27a00111 FILE
 27_anchor_resolution.py

@@ -1,0 +1,10 @@
+# Summary: Tests that an INSERT action with empty content is a no-op.
+57125341 AP 3.1
+
+57125341 FILE
+56_insert_noop.txt
+
+57125341 INSERT_AFTER
+57125341 snippet
+Line 1
+57125341 content

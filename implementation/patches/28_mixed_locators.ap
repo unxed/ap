@@ -1,7 +1,7 @@
 # Summary: Test that explicit range overrides a conflicting/garbage single snippet.
 # This simulates an AI that hallucinated a 'snippet' field while also providing a valid range.
 
-28b00222 AP 3.0
+28b00222 AP 3.1
 
 28b00222 FILE
 28_mixed_locators.py

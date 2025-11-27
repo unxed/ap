@@ -3,7 +3,7 @@
 #   1. Attempt to delete a block using a `snippet` that appears twice.
 #      The patcher should fail with an AMBIGUOUS_MATCH error.
 
-23a3b180 AP 3.0
+23a3b180 AP 3.1
 
 23a3b180 FILE
 23_error_range_ambiguous.py

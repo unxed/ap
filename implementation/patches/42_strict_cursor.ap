@@ -1,0 +1,26 @@
+# Summary: This test ensures the patcher's cursor logic is strict.
+# It should fail because the second modification's snippet appears *before*
+# the first modification in the source file.
+#
+# Plan:
+#   1. Replace "Unique Line", which sets the cursor position to the middle of the file.
+#   2. Attempt to replace "Line at top". With strict cursor logic, the search for this
+#      snippet will start *after* the first change and will not find it,
+#      resulting in a SNIPPET_NOT_FOUND error.
+
+t3st0042 AP 3.1
+
+t3st0042 FILE
+42_strict_cursor.py
+
+t3st0042 REPLACE
+t3st0042 snippet
+print("Unique Line")
+t3st0042 content
+    print("This change succeeds and moves the cursor forward.")
+
+t3st0042 REPLACE
+t3st0042 snippet
+print("Line at top")
+t3st0042 content
+# This change should fail because the snippet is before the cursor now.

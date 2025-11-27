@@ -5,6 +5,32 @@ import difflib
 import json
 import re
 from typing import Optional, Tuple, List, Dict, Any
+import shutil
+try:
+    from typing import TypedDict
+except ImportError:
+    from typing_extensions import TypedDict
+
+# Define types for the internal patch structure for clarity and static analysis.
+class Modification(TypedDict, total=False):
+    action: str
+    snippet: str
+    anchor: str
+    content: str
+    snippet_tail: str
+    include_leading_blank_lines: int
+    include_trailing_blank_lines: int
+
+class FileChange(TypedDict, total=False):
+    file_path: str
+    rename_to: str
+    delete_file: bool
+    newline: str
+    modifications: List[Modification]
+
+class PatchData(TypedDict):
+    version: str
+    changes: List[FileChange]
 
 def visualize_str(s: str) -> str:
     """Makes special characters visible for debugging."""
@@ -23,20 +49,20 @@ def debug_print(debug_flag: bool, title: str, **kwargs):
             print(f"  {key}: {visualize_str(value)}")
     print("--------------------" + "-" * len(title))
 
-def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
-    """Parses the AP 3.0 delimiter-based format into the standard internal dict structure."""
+def parse_ap3_format(patch_file: str) -> PatchData:
+    """Parses the AP 3.1 delimiter-based format into the standard internal dict structure."""
     with open(patch_file, 'r', encoding='utf-8') as f:
         lines = f.read().splitlines()
 
     patch_id = None
-    data = {'version': '3.0', 'changes': []}
+    data: PatchData = {'version': '3.1', 'changes': []}
     current_file_change = None
     current_modification = None
     reading_key = None
     value_lines = []
     pending_args = None # To store args for delayed processing (e.g. CREATE_FILE)
 
-    header_pattern = re.compile(r'^([a-z0-9]{8})\s+AP\s+3\.0$')
+    header_pattern = re.compile(r'^([a-zA-Z0-9]{8})\s+AP\s+3\.1$')
     directive_pattern = None
 
     line_iterator = iter(enumerate(lines, 1))
@@ -47,7 +73,7 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
         if not stripped_line or stripped_line.startswith('#'):
             continue
         match = header_pattern.match(stripped_line)
-        if not match: raise ValueError(f"Invalid AP 3.0 header on line {line_num}.")
+        if not match: raise ValueError(f"Invalid AP 3.1 header on line {line_num}.")
         patch_id = match.group(1)
         directive_pattern = re.compile(rf'^{re.escape(patch_id)}\s+(.*)$')
         break
@@ -67,7 +93,7 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
 
                 if reading_key == "path" and current_file_change:
                     current_file_change['file_path'] = value
-                elif reading_key == "CREATE_FILE_PATH":
+                elif reading_key == "CREATE_PATH":
                     # Implicit file creation support
                     if value:
                         current_file_change = {'modifications': []}
@@ -75,11 +101,13 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
                         current_file_change['file_path'] = value
                         if pending_args in {'LF', 'CRLF', 'CR'}: current_file_change['newline'] = pending_args
 
-                    if not current_file_change: raise ValueError(f"Action 'CREATE_FILE' on line {line_num} (prev) before FILE.")
-                    current_modification = {'action': 'CREATE_FILE'}
+                    if not current_file_change: raise ValueError(f"Action 'CREATE' on line {line_num} (prev) before FILE.")
+                    current_modification = {'action': 'CREATE'}
                     current_file_change['modifications'].append(current_modification)
                 elif current_modification:
                     current_modification[reading_key] = value
+                elif reading_key == 'RENAME' and current_file_change:
+                    current_file_change['rename_to'] = value
 
                 reading_key, value_lines, pending_args = None, [], None
 
@@ -89,7 +117,7 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
             ACTIONS = {'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE'}
             VALUE_KEYS = {'snippet', 'anchor', 'content', 'snippet_tail'}
             ARG_KEYS = {'include_leading_blank_lines', 'include_trailing_blank_lines'}
-            FILE_STARTERS = {'CREATE_FILE'} # Treated as hybrid Action/Value
+            FILE_STARTERS = {'CREATE'} # Treated as hybrid Action/Value
             NEWLINE_VALS = {'LF', 'CRLF', 'CR'}
 
             if key == 'FILE':
@@ -103,13 +131,26 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
                 current_file_change['modifications'].append(current_modification)
             elif key in FILE_STARTERS:
                 # Hybrid: acts as key-value (for path) AND action.
-                # Logic deferred to flush phase to check if value exists.
-                reading_key = 'CREATE_FILE_PATH'
+                reading_key = 'CREATE_PATH'
                 pending_args = args
             elif key in VALUE_KEYS:
                 if args: raise ValueError(f"Directive '{key}' on line {line_num} takes no arguments.")
+                if not current_modification and current_file_change and key == 'content':
+                    # Heuristic: A 'content' block directly after 'FILE' implies 'CREATE'.
+                    current_modification = {'action': 'CREATE'}
+                    current_file_change['modifications'].append(current_modification)
                 if key != 'path' and not current_modification: raise ValueError(f"'{key}' on line {line_num} outside modification.")
                 reading_key = key
+            elif key == 'RENAME':
+                if args: raise ValueError(f"Directive '{key}' on line {line_num} takes no arguments.")
+                if not current_file_change: raise ValueError(f"'{key}' on line {line_num} outside file block.")
+                if current_file_change.get('modifications'): raise ValueError(f"'{key}' cannot be combined with other actions in the same file block.")
+                reading_key = 'RENAME'
+            elif key in NEWLINE_VALS:
+                if not current_file_change: raise ValueError(f"Newline '{key}' on line {line_num} before FILE.")
+                current_file_change['newline'] = key
+            # Note: Ambiguous file-level DELETE is no longer parsed here.
+            # It's handled by a structural heuristic in apply_patch.
             elif key in ARG_KEYS:
                 if not current_modification: raise ValueError(f"'{key}' on line {line_num} outside modification.")
                 if not args: raise ValueError(f"Directive '{key}' on line {line_num} requires an argument.")
@@ -121,6 +162,9 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
             else: raise ValueError(f"Unknown directive '{key}' on line {line_num}.")
 
         elif reading_key: value_lines.append(line)
+        elif current_file_change and not reading_key and not line.strip():
+            # Allow blank lines between FILE and RENAME directives
+            pass
         elif line.strip(): raise ValueError(f"Unexpected content on line {line_num}: '{line}'")
 
     if reading_key:
@@ -132,17 +176,19 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
 
         if reading_key == "path" and current_file_change:
             current_file_change['file_path'] = value
-        elif reading_key == "CREATE_FILE_PATH":
+        elif reading_key == "CREATE_PATH":
             if value:
                 current_file_change = {'modifications': []}
                 data['changes'].append(current_file_change)
                 current_file_change['file_path'] = value
                 if pending_args in {'LF', 'CRLF', 'CR'}: current_file_change['newline'] = pending_args
-            if not current_file_change: raise ValueError(f"Action 'CREATE_FILE' at end of file before FILE.")
-            current_modification = {'action': 'CREATE_FILE'}
+            if not current_file_change: raise ValueError(f"Action 'CREATE' at end of file before FILE.")
+            current_modification = {'action': 'CREATE'}
             current_file_change['modifications'].append(current_modification)
         elif current_modification:
             current_modification[reading_key] = value
+        elif reading_key == 'RENAME' and current_file_change:
+            current_file_change['rename_to'] = value
 
     return data
 
@@ -304,13 +350,18 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
     debug_print(debug, "SNIPPET SEARCH", snippet=snippet, search_space_len=len(search_space))
     occurrences = smart_find(search_space, snippet)
 
-    # === SNIPPET CURSOR FILTER ===
-    # If multiple snippets found, strictly prefer the first one after the cursor.
-    if len(occurrences) > 1:
+    # === SNIPPET CURSOR FILTER (STRICT) ===
+    # Always filter by cursor, not just on ambiguity, to enforce sequential patching.
+    if occurrences: # Only filter if there's anything to filter
         forward_occurrences = [o for o in occurrences if (o[0] + offset) >= last_match_end]
         if forward_occurrences:
+            # Of the valid forward matches, take the first one.
             occurrences = [forward_occurrences[0]]
-            debug_print(debug, "SNIPPET AMBIGUITY RESOLVED (CURSOR)", position=occurrences[0][0])
+            if len(forward_occurrences) > 1:
+                debug_print(debug, "SNIPPET AMBIGUITY RESOLVED (CURSOR)", position=occurrences[0][0])
+        else:
+            # All occurrences were behind the cursor. Treat as not found.
+            occurrences = []
 
     if not occurrences:
         preview_lines = [l for l in search_space.splitlines() if l.strip()]
@@ -329,7 +380,7 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
     start_pos, end_pos = occurrences[0]
     return (start_pos + offset, end_pos + offset), {}
 
-def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_report: bool = False, debug: bool = False, force: bool = False, failure_report_path: str = None, create_failure_case: bool = False) -> Dict[str, Any]:
+def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_report: bool = False, debug: bool = False, force: bool = False, failure_report_path: str = None, create_failure_case: bool = False, silent: bool = False) -> Dict[str, Any]:
     patch_content = ""
     try:
         with open(patch_file, 'r', encoding='utf-8') as f:
@@ -396,14 +447,13 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 print("  Did you mean one of these?")
                 for match in ctx['fuzzy_matches']:
                     print(f"    Line {match['line_number']} (Score: {match['score']}):")
-                    # FIX: Properly print multi-line 'text' from fuzzy match
-                    print("      Actual:")
-                    for line in (match['text'] or "").splitlines():
-                        print(f"        {visualize_str(line)}")
-
-                    expected_first = (ctx.get('snippet') or "").strip().splitlines()
-                    if expected_first:
-                        print(f"      Expected (first line): {visualize_str(expected_first[0])}")
+                    actual_text = (match.get('text') or "").splitlines(keepends=True)
+                    expected_text = (ctx.get('snippet') or "").strip().splitlines(keepends=True)
+                    diff = difflib.unified_diff(
+                        expected_text, actual_text,
+                        fromfile="expected snippet", tofile="actual text (in file)"
+                    )
+                    print("      " + "".join(diff).replace("\n", "\n      "))
 
         return details
 
@@ -424,7 +474,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
     try:
         with open(patch_file, 'r', encoding='utf-8') as f:
             for line in f:
-                match = re.match(r'^([a-z0-9]{8})\s+AP\s+3\.0$', line.strip())
+                match = re.match(r'^([a-zA-Z0-9]{8})\s+AP\s+3\.1$', line.strip())
                 if match: patch_id_str = match.group(1); break
     except: pass
 
@@ -439,12 +489,16 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             return report_error(err_details)
         relative_path = change['file_path']
 
+        # SECURITY: Perform path validation before any filesystem operations.
         real_project_dir = os.path.realpath(project_dir)
-        real_file_path = os.path.realpath(os.path.join(project_dir, relative_path))
-        if not real_file_path.startswith(os.path.join(real_project_dir, '')):
-            err_details = {"status": "FAILED", "file_path": relative_path, "error": {"code": "INVALID_FILE_PATH", "message": "Path traversal detected."}}
+        try:
+            real_file_path = os.path.realpath(os.path.join(project_dir, relative_path))
+            if not real_file_path.startswith(os.path.join(real_project_dir, '')):
+                raise ValueError("Path traversal detected.")
+        except Exception: # Catches errors from invalid paths like on Windows
+            err_details = {"status": "FAILED", "file_path": relative_path, "error": {"code": "INVALID_FILE_PATH", "message": "Path traversal detected or invalid path format."}}
             if create_failure_case:
-                create_failure_case_file("afailed.log", err_details, None)
+                create_failure_case_file(os.path.join(project_dir, "afailed.log"), err_details, None)
             return report_error(err_details)
 
         file_path = os.path.join(project_dir, relative_path)
@@ -452,17 +506,61 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         newline_char = {'LF': '\n', 'CRLF': '\r\n', 'CR': '\r'}.get(newline_mode) or (detect_line_endings(file_path) if os.path.exists(file_path) else os.linesep)
         debug_print(debug, "PLANNING FOR FILE", file=file_path, newline_mode=newline_mode or "DETECTED", detected_newline=newline_char)
 
+        terminal_op_planned = False
+        # CONTEXTUAL FILE DELETION:
+        # If a file block contains exactly one modification, which is a `DELETE`
+        # action with no other locators, we treat it as a command to delete the file.
+        mods = change.get('modifications', [])
+        if len(mods) == 1 and mods[0].get('action') == 'DELETE' and len(mods[0]) == 1:
+            if not os.path.exists(file_path):
+                debug_print(debug, "IDEMPOTENCY SKIP", message="Path to delete does not exist.", path=file_path)
+                continue
+            write_plan.append(('DELETE_PATH', file_path, None, relative_path))
+            continue
+
+        if 'rename_to' in change:
+            new_relative_path = change['rename_to']
+            new_file_path = os.path.join(project_dir, new_relative_path)
+
+            try:
+                real_new_file_path = os.path.realpath(new_file_path)
+                if not real_new_file_path.startswith(os.path.join(real_project_dir, '')):
+                    raise ValueError("Path traversal detected.")
+            except Exception:
+                err_details = {"status": "FAILED", "file_path": relative_path, "error": {"code": "INVALID_FILE_PATH", "message": "Path traversal detected in new rename path."}}
+                if create_failure_case: create_failure_case_file(os.path.join(project_dir, "afailed.log"), err_details, None)
+                return report_error(err_details)
+
+            if os.path.exists(new_file_path):
+                # Idempotency check: if source is gone but dest exists, we're good.
+                if not os.path.exists(file_path):
+                    debug_print(debug, "IDEMPOTENCY SKIP", message="Source does not exist, but destination does. Assuming rename complete.", old_path=file_path, new_path=new_file_path)
+                    continue
+                err_details = {"status": "FAILED", "file_path": relative_path, "error": {"code": "DESTINATION_EXISTS", "message": "Rename destination already exists."}}
+                if create_failure_case: create_failure_case_file("afailed.log", err_details, None)
+                return report_error(err_details)
+
+            if not os.path.exists(file_path):
+                err_details = {"status": "FAILED", "file_path": relative_path, "error": { "code": "FILE_NOT_FOUND", "message": "Target for rename not found." }}
+                if create_failure_case: create_failure_case_file("afailed.log", err_details, "")
+                return report_error(err_details)
+
+            write_plan.append(('RENAME', file_path, new_file_path, relative_path))
+            continue
+
         original_content = ""
-        try:
+        file_existed = os.path.exists(file_path)
+        if file_existed and os.path.isdir(file_path):
+            pass # It's a directory, don't try to read it. The logic below will handle it.
+        elif file_existed:
             with open(file_path, 'r', encoding='utf-8', newline=None) as f: original_content = f.read()
-            file_existed = True
-        except FileNotFoundError:
-            file_existed = False
-            if any(mod.get('action') == 'CREATE_FILE' for mod in change.get('modifications', [])): original_content = ""
+        else: # File does not exist
+            if any(mod.get('action') == 'CREATE' for mod in change.get('modifications', [])):
+                original_content = ""
             else:
                 err_details = {"status": "FAILED", "file_path": relative_path, "error": { "code": "FILE_NOT_FOUND", "message": "Target file not found." }}
                 if create_failure_case:
-                    create_failure_case_file("afailed.log", err_details, "") # File not found, content is empty
+                    create_failure_case_file("afailed.log", err_details, "")
                 return report_error(err_details)
 
         internal_newline = '\n'
@@ -478,11 +576,30 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     create_failure_case_file("afailed.log", err_details, original_content)
                 return report_error(err_details)
 
-            content_to_add = mod.get('content', '')
+            content_to_add = mod.get('content') # Use get, returns None if not present
 
-            # === SAFE CREATE FILE ===
-            if action == 'CREATE_FILE':
-                if os.path.exists(file_path):
+            # === SAFE CREATE (File or Directory) ===
+            if action == 'CREATE':
+                # Case 1: Create a directory
+                if content_to_add is None:
+                    # Idempotency check: if it's already a dir, we're done.
+                    if os.path.isdir(file_path):
+                        debug_print(debug, "IDEMPOTENCY SKIP", message="Directory already exists.", path=file_path)
+                        break
+                    # If it's a file, it's an error.
+                    if os.path.exists(file_path):
+                        err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "PATH_IS_FILE", "message": "Cannot create directory, a file exists at the path."}}
+                        if create_failure_case: create_failure_case_file("afailed.log", err_details, original_content)
+                        return report_error(err_details)
+
+                    # This is a directory creation, so it's a terminal action for this file block.
+                    write_plan.append(('CREATE_DIR', file_path, None, relative_path))
+                    terminal_op_planned = True
+                    working_content = "" # No further processing
+                    break
+
+                # Case 2: Create a file (content is not None)
+                if os.path.isfile(file_path):
                     with open(file_path, 'r', encoding='utf-8', newline=None) as f_check:
                         existing_content = f_check.read().replace('\r\n', internal_newline).replace('\r', internal_newline)
 
@@ -516,6 +633,10 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     debug_print(debug, "HEURISTIC APPLIED", message="snippet_tail matches content. Treating as single snippet.")
                     snippet_tail = None
 
+            # Heuristic: If snippet and snippet_tail are identical, treat as a single-snippet operation.
+            if snippet_val and snippet_tail and snippet_val.strip() == snippet_tail.strip():
+                debug_print(debug, "HEURISTIC APPLIED", message="snippet is identical to snippet_tail. Treating as single snippet.")
+                snippet_tail = None
             # Heuristic: Auto-correct AI error where snippet_tail is part of snippet (now snippet_val).
             if snippet_val and snippet_tail and snippet_val.strip().endswith(snippet_tail.strip()):
                 debug_print(debug, "HEURISTIC APPLIED", message="snippet_tail is suffix of snippet. Treating as single snippet.")
@@ -551,7 +672,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             elif snippet_val is not None:
                  target_pos, error = find_target_in_content(working_content, mod.get('anchor'), snippet_val, debug, last_mod_end_pos)
 
-            elif action != 'CREATE_FILE':
+            elif action != 'CREATE':
                 err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Modification requires locators."}}
                 if create_failure_case:
                     create_failure_case_file("afailed.log", err_details, original_content)
@@ -570,7 +691,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
                 report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
                 report['error']['context']['action'] = action
-                if force:
+                if force and not silent:
                     print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action')}) in '{relative_path}'. Reason: {error.get('message')}")
                     if create_failure_case:
                         create_failure_case_file(f"afailed.{mod_idx}.log", report, original_content)
@@ -586,8 +707,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         create_failure_case_file("afailed.log", report, original_content)
                     return report_error(report)
 
-            if action == 'CREATE_FILE': continue
-            last_mod_end_pos = target_pos[0]
+            if action == 'CREATE': continue
             start_pos, end_pos = target_pos
 
             for key, val in [('include_leading_blank_lines', -1), ('include_trailing_blank_lines', 1)]:
@@ -640,20 +760,31 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 working_content = working_content[:end_pos] + indented_content + working_content[end_pos:]
             elif action == 'INSERT_BEFORE':
                 working_content = working_content[:start_pos] + indented_content + working_content[start_pos:]
-            if force:
+            # Update cursor position for the next iteration based on the change that just happened.
+            if action == 'REPLACE':
+                last_mod_end_pos = start_pos + len(indented_content)
+            elif action == 'INSERT_AFTER':
+                last_mod_end_pos = end_pos + len(indented_content)
+            elif action == 'INSERT_BEFORE':
+                last_mod_end_pos = start_pos + len(indented_content)
+            elif action == 'DELETE':
+                last_mod_end_pos = start_pos
+            if force and not silent:
                 print(f"  + SUCCESS: Mod #{mod_idx + 1} ({action}) applied.")
 
-        final_content = newline_char.join([line.rstrip(' \t') for line in working_content.split(internal_newline)])
-        if final_content != original_content or not file_existed:
-            write_plan.append((file_path, final_content, relative_path))
+        if not terminal_op_planned:
+            final_content = newline_char.join([line.rstrip(' \t') for line in working_content.split(internal_newline)])
+            if final_content != original_content or not file_existed:
+                write_plan.append(('WRITE', file_path, final_content, relative_path))
 
     if not write_plan and failed_changes_output:
         return {"status": "FAILED", "error": {"code": "MODIFICATION_FAILED", "message": "One or more modifications failed."}}
 
     if force and failed_changes_output:
-        with open("afailed.ap", "w", encoding="utf-8") as f:
+        afailed_path = os.path.join(project_dir, "afailed.ap")
+        with open(afailed_path, "w", encoding="utf-8") as f:
             f.write(f"# Summary: Failed changes from a forced patch application.\n\n")
-            f.write(f"{patch_id_str} AP 3.0\n\n")
+            f.write(f"{patch_id_str} AP 3.1\n\n")
             for change_item in failed_changes_output:
                 f.write(f"{patch_id_str} FILE")
                 if change_item.get("newline"): f.write(f" {change_item['newline']}")
@@ -665,26 +796,72 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     for key in ['include_leading_blank_lines', 'include_trailing_blank_lines']:
                         if key in mod_item: f.write(f"{patch_id_str} {key} {mod_item[key]}\n")
                     f.write("\n")
-        print(f"\nWARNING: Some changes failed and were written to afailed.ap")
+        if not silent: print(f"\nWARNING: Some changes failed and were written to {afailed_path}")
         if not write_plan:
              return {"status": "FAILED", "error": {"code": "ALL_CHANGES_FAILED", "message": "All changes failed in force mode."}}
 
     if not dry_run:
-        for f_path, f_content, r_path in write_plan:
+        # Separate operations into phases to avoid conflicts (e.g., delete before create)
+        delete_ops = [op for op in write_plan if op[0] == 'DELETE_PATH']
+        rename_ops = [op for op in write_plan if op[0] == 'RENAME']
+        create_dir_ops = [op for op in write_plan if op[0] == 'CREATE_DIR']
+        write_ops = [op for op in write_plan if op[0] == 'WRITE']
+
+        # Phase 1: Deletions
+        for _, path_to_delete, _, r_path in delete_ops:
+            try:
+                debug_print(debug, "DELETING", path=path_to_delete)
+                if os.path.isfile(path_to_delete):
+                    os.remove(path_to_delete)
+                elif os.path.isdir(path_to_delete):
+                    shutil.rmtree(path_to_delete)
+            except (IOError, OSError) as e:
+                err_details = {"status": "FAILED", "file_path": r_path, "error": {"code": "FILE_DELETE_ERROR", "message": str(e)}}
+                if create_failure_case: create_failure_case_file("afailed.log", err_details, None)
+                return report_error(err_details)
+
+        # Phase 2: Renames
+        for _, old_path, new_path, r_path in rename_ops:
+            try:
+                debug_print(debug, "RENAMING", old=old_path, new=new_path)
+                # For idempotency, source might already be gone if destination exists
+                if os.path.exists(old_path):
+                    os.makedirs(os.path.dirname(new_path) or '.', exist_ok=True)
+                    os.rename(old_path, new_path)
+            except OSError as e:
+                err_details = {"status": "FAILED", "file_path": r_path, "error": {"code": "FILE_RENAME_ERROR", "message": str(e)}}
+                if create_failure_case: create_failure_case_file("afailed.log", err_details, None)
+                return report_error(err_details)
+
+        # Phase 3: Directory Creations
+        for _, path_to_create, _, r_path in create_dir_ops:
+            try:
+                debug_print(debug, "CREATING DIR", path=path_to_create)
+                os.makedirs(path_to_create, exist_ok=True)
+            except OSError as e:
+                err_details = {"status": "FAILED", "file_path": r_path, "error": {"code": "DIR_CREATE_ERROR", "message": str(e)}}
+                if create_failure_case: create_failure_case_file("afailed.log", err_details, None)
+                return report_error(err_details)
+
+        # Phase 4: File Writes
+        for _, f_path, f_content, r_path in write_ops:
             try:
                 debug_print(debug, "WRITING FILE", path=f_path, content_len=len(f_content))
                 os.makedirs(os.path.dirname(f_path) or '.', exist_ok=True)
-                with open(f_path, 'w', encoding='utf-8', newline='' if newline_mode else None) as f: f.write(f_content)
+                # Always use newline='' to prevent translation. The newline_char has already been
+                # determined (either from spec or detection) and is baked into the f_content string.
+                with open(f_path, 'w', encoding='utf-8', newline='') as f: f.write(f_content)
             except IOError as e:
                 err_details = {"status": "FAILED", "file_path": r_path, "error": {"code": "FILE_WRITE_ERROR", "message": str(e)}}
                 if create_failure_case:
-                    # We can't know which original_content this write corresponds to without more tracking.
-                    # Best effort: use the last known original_content. This is an edge case.
                     create_failure_case_file("afailed.log", err_details, original_content if 'original_content' in locals() else None)
                 return report_error(err_details)
 
-    elif write_plan: debug_print(debug, "DRY RUN: SKIPPING WRITE", num_files=len(write_plan))
-    else: debug_print(debug, "NO CHANGES: SKIPPING WRITE")
+    elif write_plan:
+        debug_print(debug, "DRY RUN: SKIPPING WRITE", num_files=len(write_plan))
+    else:
+        debug_print(debug, "NO CHANGES: SKIPPING WRITE")
+        pass
 
     return {"status": "SUCCESS"}
 
@@ -698,7 +875,7 @@ if __name__ == '__main__':
     parser.add_argument("--failure-report", help="Path to save a detailed JSON report on failure (includes context).")
     parser.add_argument("--create-failure-case", action="store_true", help="On failure, create afailed.log (or afailed.<mod_idx>.log with --force) with full context for debugging.")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging.")
-    parser.add_argument("-v", "--version", action="version", version="ap patcher 3.0")
+    parser.add_argument("-v", "--version", action="version", version="ap patcher 3.1")
 
     args = parser.parse_args()
     result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug, args.force, args.failure_report, args.create_failure_case)

@@ -1,0 +1,11 @@
+# Summary: This test ensures the patcher is robust to a common LLM error
+# where FILE is used instead of CREATE_FILE.
+# The parser should apply the heuristic and treat this as a CREATE_FILE action.
+
+t3st0043 AP 3.1
+
+t3st0043 FILE
+43_created.txt
+
+t3st0043 content
+This file was created via the FILE+content heuristic.

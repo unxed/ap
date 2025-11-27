@@ -3,11 +3,11 @@
 #   1. Attempt to create a file outside the project directory using `../` in the path.
 #      The patch should fail with an INVALID_FILE_PATH error.
 
-20e22027 AP 3.0
+20e22027 AP 3.1
 
 20e22027 FILE
 ../path_traversal_attack.txt
 
-20e22027 CREATE_FILE
+20e22027 CREATE
 20e22027 content
 This file should not be created.

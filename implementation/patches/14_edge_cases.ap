@@ -4,7 +4,7 @@
 #   2. Replace a line with content that includes trailing whitespace (which should be stripped).
 #   3. Insert a footer after the last line.
 
-14ed8eca AP 3.0
+14ed8eca AP 3.1
 
 14ed8eca FILE
 14_edge_cases.py

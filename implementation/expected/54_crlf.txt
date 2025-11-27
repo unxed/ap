@@ -1,0 +1,3 @@
+Line 1
+The second line was changed.
+Line 3

@@ -1,0 +1,7 @@
+# Test for directory creation
+t3st0045 AP 3.1
+
+t3st0045 FILE
+new_dir/
+
+t3st0045 CREATE

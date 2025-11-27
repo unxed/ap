@@ -1,7 +1,7 @@
 # Summary: Test robustness when anchor text is repeated in snippet.
 # This simulates a common AI error where the anchor is copy-pasted into the snippet.
 
-29a00333 AP 3.0
+29a00333 AP 3.1
 
 29a00333 FILE
 29_anchor_overlap.py

@@ -1,4 +1,4 @@
-### The 'ap' (AI-friendly Patch) Format - Version 3.0
+### The 'ap' (AI-friendly Patch) Format - Version 3.1
 
 ## Abstract
 
@@ -50,7 +50,7 @@ An `ap` patch file MUST be a plain text file encoded in UTF-8. The format is lin
 Any lines at the beginning of the file starting with `#` are considered comments and MUST be ignored by the Patcher.
 
 The first non-comment line of an `ap` patch file MUST be the header directive:
-`[ID] AP 3.0`
+`[ID] AP 3.1`
 
 - `[ID]` is a unique identifier for the entire patch, which MUST be a sequence of 8 random alphanumeric characters (e.g., `a0b1c2z9`).
 - This `[ID]` MUST be used as a prefix for all subsequent directives within the same file.
@@ -89,7 +89,7 @@ path/to/my/file.txt
 
 ### 2.5. Modification Block
 
-A modification is a single atomic change to be applied. A new modification block is signaled by an **Action Directive**.
+A new modification block is signaled by an **Action Directive**. A file block can also represent a single `RENAME` operation.
 
 **Action Directives (KEY-ARGS)**
 These directives mark the beginning of a new modification. The value MUST be one of:
@@ -97,13 +97,28 @@ These directives mark the beginning of a new modification. The value MUST be one
 - `INSERT_AFTER`: Insert content immediately after a snippet.
 - `INSERT_BEFORE`: Insert content immediately before a snippet.
 - `DELETE`: Remove a snippet or range.
-- `CREATE_FILE`: Create a new file with the specified content.
+- `CREATE`: Create a new file or directory.
 
 **Content and Locator Directives (KEY-VALUE)**
-These directives provide the data for a modification.
+**File Operation Directives**
+These directives define file-level operations and MUST be mutually exclusive with other Action or File Operation Directives within the same file block.
+- `RENAME` (KEY-VALUE): Specifies a new name for the file or directory defined in the preceding `FILE` directive. The value of this directive is the new path.
+
+**Contextual File Deletion**
+The `DELETE` Action Directive has a special behavior for file-level operations. A Patcher MUST interpret a `FILE` block that contains **only a `DELETE` directive** and no other directives (such as `snippet` or `content`) as a command to delete the entire file or directory specified in the `FILE` directive.
+
+Example of deleting a file:
+```
+a1b2c3d4 FILE
+path/to/obsolete/file.txt
+
+a1b2c3d4 DELETE
+```
+
+These directives provide the data for a modification. A `snippet` or `anchor` MUST be ignored by the Patcher if the action is `CREATE`.
 - `snippet`: A string of code to locate. If `snippet_tail` is also provided, this marks the beginning of the range.
 - `anchor`: An OPTIONAL string of code to narrow the search scope for a `snippet`.
-- `content`: The new code to be used for the operation. MUST be present for `REPLACE`, `INSERT_AFTER`, `INSERT_BEFORE`, and `CREATE_FILE`. MUST be omitted for `DELETE`.
+- `content`: The new code to be used for the operation. MUST be present for `REPLACE`, `INSERT_AFTER`, `INSERT_BEFORE`. For `CREATE`, its presence indicates file creation, and its absence indicates directory creation. MUST be omitted for `DELETE`.
 - `snippet_tail`: An OPTIONAL string of code that marks the end of a range. It MUST be used together with `snippet`.
 
 **Option Directives (KEY-ARGS)**
@@ -121,11 +136,14 @@ A Patcher MUST treat the application of an entire patch file as a single, atomic
 
 A Patcher MUST apply modifications idempotently. Applying the same patch multiple times to the same source tree MUST NOT cause subsequent changes or errors after the first successful application. To achieve this, each modification MUST be checked for its state before the operation is attempted, according to the following rules:
 
+- **`RENAME`**: If the source file/directory does not exist but the destination file/directory does, the operation is considered already complete and MUST be skipped. If the source is missing and the destination is also missing, the Patcher MUST report an error.
 - **`DELETE`**: If the `snippet` is not found, the operation is considered already complete and MUST be skipped.
-- **`REPLACE`**: If the content at the target location is already identical to the modification's `content`, the operation MUST be skipped.
+- **`REPLACE`**: If the content at the target location is already identical to the modification's `content`, the operation MUST be skipped. If the `snippet` is not found but the `content` is already present in the search scope, this is also considered a successfully completed operation.
 - **`INSERT_AFTER`**: If the code immediately following the `snippet` already matches the `content`, the operation MUST be skipped.
 - **`INSERT_BEFORE`**: If the code immediately preceding the `snippet` already matches the `content`, the operation MUST be skipped.
-- **`CREATE_FILE`**: If a file at the target path already exists and its content is identical to the provided `content`, the operation MUST be skipped. If the file exists with different content, the Patcher MUST report an error to prevent overwriting an unrelated file.
+- **`CREATE`**:
+    - For files (when `content` is provided): If a file at the target path already exists and its content is identical to the provided `content`, the operation MUST be skipped. If the file exists with different content, the Patcher MUST report an error.
+    - For directories (when `content` is absent): If a directory at the target path already exists, the operation is considered complete and MUST be skipped.
 
 ### 3.2. Search and Location Algorithm
 
@@ -148,7 +166,7 @@ A Patcher MUST use a consistent, normalized search algorithm for locating an `an
 1.  The Patcher first locates the `snippet` following the same uniqueness and scoping rules as a normal `snippet` (i.e., it must be unique within the file or within its `anchor`).
 2.  After finding the `snippet`, the Patcher searches for the *first* occurrence of the `snippet_tail` that appears *after* the end of the `snippet`.
 3.  If the `snippet` is found but the `snippet_tail` is not found in the remainder of the search scope, the Patcher MUST report an error. The entire region from the beginning of the `snippet` to the end of the `snippet_tail` is considered the target for the modification.
-**Sequential Cursoring**: A Patcher MUST process modifications for a single file sequentially. After a modification is successfully calculated (in memory), the patcher MUST record the end position of the change. For all subsequent searches (`anchor` or `snippet`) within the same file, if multiple occurrences are found, the patcher MUST strictly use the first occurrence that appears *after* the recorded end position of the previous modification. This allows for reliable sequential updates of identical lines of code without ambiguity errors.
+**Sequential Cursoring**: A Patcher MUST process modifications for a single file sequentially. After a modification is successfully calculated (in memory), the patcher MUST record the end position of the change. All subsequent searches (`anchor` or `snippet`) for the same file MUST begin *after* this recorded end position. This ensures that patches are always applied from top to bottom, preventing ambiguous matches with code that has already been processed.
 
 ### 3.3. Modification Logic
 
@@ -172,6 +190,7 @@ To improve reliability when consuming patches generated by AI, a Patcher SHOULD 
 -   **Hybrid Search ("Soft Start, Strict Tail"):** When searching for a multi-line `anchor` or `snippet`, the search algorithm SHOULD match the *first line* of the locator as a **suffix** of a line in the target file, while requiring all *subsequent lines* of the locator to match **exactly**. This makes the patch resilient to minor, non-semantic prefix variations (e.g., list numbers, bullet points) that AI models often add or omit in the first line of a code block. The uniqueness requirement for the entire matched block MUST be maintained.
 -   **Range Auto-Correction:** When processing a `REPLACE` or `DELETE` action with a `snippet`/`snippet_tail` pair, the Patcher SHOULD first check if the `snippet_tail` is a suffix of the `snippet`. If it is, the Patcher SHOULD treat this as a single-snippet operation, use the `snippet` for it and ignore the `snippet_tail`. This corrects a frequent AI error where the entire block to be replaced is put into `snippet`, causing a "end snippet not found" failure.
 -   **Ambiguous Anchor Disambiguation:** If an `anchor` is found multiple times in the target file, the Patcher SHOULD NOT immediately fail. Instead, it SHOULD temporarily search for the target `snippet` within the scope of *each* anchor occurrence. If the `snippet` is found relative to exactly one of the anchor occurrences, the Patcher MUST proceed using that specific anchor, resolving the ambiguity based on the uniqueness of the anchor-snippet pair.
+-   **Implicit File Creation:** If a `FILE` block contains only a `content` directive and no Action Directives, the Patcher SHOULD treat this as a `CREATE` action for that file. This handles a common LLM error where `CREATE` is omitted.
 
 
 ## 4. AI Generation Rules
@@ -257,7 +276,7 @@ The following `afix.ap` file describes the modifications:
 #   2. Update the `add` function to also handle summing a list of numbers.
 #   3. Remove the unused `get_pi` function.
 
-e4a2f1b8 AP 3.0
+e4a2f1b8 AP 3.1
 
 e4a2f1b8 FILE
 src/calculator.py
