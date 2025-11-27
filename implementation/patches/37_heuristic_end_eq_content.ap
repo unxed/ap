@@ -1,6 +1,6 @@
-# Test heuristic: end_snippet == content.
-# The AI erroneously put the NEW value in end_snippet.
-# The patcher should ignore end_snippet and just replace "timeout = 10".
+# Test heuristic: snippet_tail == content.
+# The AI erroneously put the NEW value in snippet_tail.
+# The patcher should ignore snippet_tail and just replace "timeout = 10".
 
 37a00bbb AP 3.0
 
@@ -10,7 +10,7 @@
 37a00bbb REPLACE
 37a00bbb snippet
     timeout = 10
-37a00bbb end_snippet
+37a00bbb snippet_tail
     timeout = 999
 37a00bbb content
     timeout = 999

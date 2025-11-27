@@ -7,7 +7,7 @@ t3st0041 FILE
 t3st0041 REPLACE
 t3st0041 snippet
 # This block will be replaced.
-t3st0041 end_snippet
+t3st0041 snippet_tail
 pass
 t3st0041 content
     print("Line 1")

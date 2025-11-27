@@ -12,7 +12,7 @@
     # Start block
 31a00555 snippet
     # Start block
-31a00555 end_snippet
+31a00555 snippet_tail
     # End block
 31a00555 content
     print("New Logic")

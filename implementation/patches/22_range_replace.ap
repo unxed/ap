@@ -1,7 +1,7 @@
 # Summary: Tests a range-based REPLACE action.
 # Plan:
 #   1. In `22_range_replace.py`, replace the block from "Stage 2" to the
-#      calculation of `result` using `snippet` and `end_snippet`.
+#      calculation of `result` using `snippet` and `snippet_tail`.
 
 222a48e1 AP 3.0
 
@@ -11,7 +11,7 @@
 222a48e1 REPLACE
 222a48e1 snippet
 # Stage 2: Core logic (this whole block will be replaced)
-222a48e1 end_snippet
+222a48e1 snippet_tail
 result = intermediate_result / len(processed_data)
 222a48e1 content
     # New, simplified implementation

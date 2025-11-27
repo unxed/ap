@@ -87,7 +87,7 @@ def parse_ap3_format(patch_file: str) -> Dict[str, Any]:
             key, args = parts[0], parts[1] if len(parts) > 1 else None
 
             ACTIONS = {'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE'}
-            VALUE_KEYS = {'snippet', 'anchor', 'content', 'end_snippet'}
+            VALUE_KEYS = {'snippet', 'anchor', 'content', 'snippet_tail'}
             ARG_KEYS = {'include_leading_blank_lines', 'include_trailing_blank_lines'}
             FILE_STARTERS = {'CREATE_FILE'} # Treated as hybrid Action/Value
             NEWLINE_VALS = {'LF', 'CRLF', 'CR'}
@@ -384,7 +384,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 for line in (value or "").strip().splitlines():
                     print(f"    {line}")
 
-            for key in ['anchor', 'snippet', 'end_snippet']:
+            for key in ['anchor', 'snippet', 'snippet_tail']:
                 if ctx.get(key): print_block(key.replace('_', ' ').title(), ctx[key])
 
             if ctx.get('anchor_found') and ctx.get('search_space_preview'):
@@ -505,28 +505,28 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 break
 
             snippet_val = mod.get('snippet')
-            end_snippet = mod.get('end_snippet')
+            snippet_tail = mod.get('snippet_tail')
 
-            # Heuristic: If end_snippet is identical to content, the AI likely confused "what to replace" with "what to replace it with".
+            # Heuristic: If snippet_tail is identical to content, the AI likely confused "what to replace" with "what to replace it with".
             # Treat this as a point-based replacement.
-            if snippet_val and end_snippet and content_to_add:
-                norm_end = "\n".join(l.strip() for l in end_snippet.strip().splitlines())
+            if snippet_val and snippet_tail and content_to_add:
+                norm_end = "\n".join(l.strip() for l in snippet_tail.strip().splitlines())
                 norm_content = "\n".join(l.strip() for l in content_to_add.strip().splitlines())
                 if norm_end == norm_content:
-                    debug_print(debug, "HEURISTIC APPLIED", message="end_snippet matches content. Treating as single snippet.")
-                    end_snippet = None
+                    debug_print(debug, "HEURISTIC APPLIED", message="snippet_tail matches content. Treating as single snippet.")
+                    snippet_tail = None
 
-            # Heuristic: Auto-correct AI error where end_snippet is part of snippet (now snippet_val).
-            if snippet_val and end_snippet and snippet_val.strip().endswith(end_snippet.strip()):
-                debug_print(debug, "HEURISTIC APPLIED", message="end_snippet is suffix of snippet. Treating as single snippet.")
-                end_snippet = None
+            # Heuristic: Auto-correct AI error where snippet_tail is part of snippet (now snippet_val).
+            if snippet_val and snippet_tail and snippet_val.strip().endswith(snippet_tail.strip()):
+                debug_print(debug, "HEURISTIC APPLIED", message="snippet_tail is suffix of snippet. Treating as single snippet.")
+                snippet_tail = None
 
             target_pos, error = None, {}
 
-            # Logic: If end_snippet exists, it is a range operation starting at snippet_val.
+            # Logic: If snippet_tail exists, it is a range operation starting at snippet_val.
             # If only snippet_val exists, it is a point operation.
 
-            if end_snippet is not None:
+            if snippet_tail is not None:
                 if snippet_val is None:
                     err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Range requires 'snippet'."}}
                     if create_failure_case:
@@ -541,9 +541,9 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 start_pos_info, error = find_target_in_content(working_content, mod.get('anchor'), snippet_val, debug, last_mod_end_pos)
                 if not error:
                     start_range_begin, start_range_end = start_pos_info
-                    end_occurrences = smart_find(working_content[start_range_end:], end_snippet)
+                    end_occurrences = smart_find(working_content[start_range_end:], snippet_tail)
                     if not end_occurrences:
-                        error = {"code": "END_SNIPPET_NOT_FOUND", "message": "End snippet not found.", "context": {"snippet": snippet_val, "end_snippet": end_snippet}}
+                        error = {"code": "snippet_tail_NOT_FOUND", "message": "End snippet not found.", "context": {"snippet": snippet_val, "snippet_tail": snippet_tail}}
                     else:
                         end_range_begin_rel, end_range_end_rel = end_occurrences[0]
                         target_pos = (start_range_begin, start_range_end + end_range_end_rel)
@@ -559,7 +559,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
             if error:
                 is_idempotency_skip = False
-                error_codes = ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND', 'END_SNIPPET_NOT_FOUND']
+                error_codes = ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND', 'snippet_tail_NOT_FOUND']
                 if action == 'DELETE' and error['code'] in error_codes:
                     debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet to delete is already gone.", snippet=snippet_val); is_idempotency_skip = True
                 if action == 'REPLACE' and error['code'] in error_codes:
@@ -660,7 +660,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 f.write(f"\n{change_item['file_path']}\n\n")
                 for mod_item in change_item['modifications']:
                     f.write(f"{patch_id_str} {mod_item['action']}\n")
-                    for key in ['anchor', 'snippet', 'end_snippet', 'content']:
+                    for key in ['anchor', 'snippet', 'snippet_tail', 'content']:
                         if key in mod_item: f.write(f"{patch_id_str} {key}\n{mod_item[key]}\n")
                     for key in ['include_leading_blank_lines', 'include_trailing_blank_lines']:
                         if key in mod_item: f.write(f"{patch_id_str} {key} {mod_item[key]}\n")

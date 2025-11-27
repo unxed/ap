@@ -1,5 +1,5 @@
 # Test Unified Snippet Field:
-# We uses 'snippet' + 'end_snippet'.
+# We uses 'snippet' + 'snippet_tail'.
 # The parser should map 'snippet' to 'snippet', and the applier should work.
 t3st0040 AP 3.0
 t3st0040 FILE
@@ -7,7 +7,7 @@ t3st0040 FILE
 t3st0040 REPLACE
 t3st0040 snippet
     # Block start
-t3st0040 end_snippet
+t3st0040 snippet_tail
     # Block end
 t3st0040 content
     # Replaced

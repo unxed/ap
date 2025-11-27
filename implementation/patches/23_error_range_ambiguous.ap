@@ -11,5 +11,5 @@
 23a3b180 DELETE
 23a3b180 snippet
 # AMBIGUOUS START
-23a3b180 end_snippet
+23a3b180 snippet_tail
 # AMBIGUOUS END
