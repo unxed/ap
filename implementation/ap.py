@@ -157,15 +157,52 @@ def detect_line_endings(file_path: str) -> str:
     return os.linesep
 
 def get_fuzzy_matches(content: str, snippet: str, cutoff: float = 0.7) -> List[Dict[str, Any]]:
+    """
+    Finds multi-line fuzzy matches for a snippet within content using a sliding window.
+    """
+    if not snippet or not snippet.strip():
+        return []
+
+    # Normalize the snippet once: remove blank lines and strip each line.
+    normalized_snippet_lines = [line.strip() for line in snippet.strip().splitlines() if line.strip()]
+    if not normalized_snippet_lines:
+        return []
+
+    snippet_as_block = "\n".join(normalized_snippet_lines)
+    window_size = len(normalized_snippet_lines)
+
+    # Normalize the source content, but keep track of original line numbers.
+    source_lines_with_meta = [
+        (i + 1, line.strip())
+        for i, line in enumerate(content.splitlines())
+        if line.strip()
+    ]
+
     matches = []
-    if not snippet or not snippet.strip(): return []
-    snippet_first_line = snippet.strip().splitlines()[0]
-    for i, line in enumerate(content.splitlines()):
-        line = line.strip()
-        if not line: continue
-        ratio = difflib.SequenceMatcher(None, snippet_first_line, line).ratio()
+    # Iterate through the normalized source content with a sliding window.
+    for i in range(len(source_lines_with_meta) - window_size + 1):
+        window_meta = source_lines_with_meta[i : i + window_size]
+
+        original_line_numbers = [meta[0] for meta in window_meta]
+        window_lines = [meta[1] for meta in window_meta]
+        window_as_block = "\n".join(window_lines)
+
+        # Compare the entire block from the snippet with the window block.
+        ratio = difflib.SequenceMatcher(None, snippet_as_block, window_as_block).ratio()
+
         if ratio >= cutoff:
-            matches.append({"line_number": i + 1, "score": round(ratio, 2), "text": line})
+            # To display the match, we retrieve the original, unstripped lines.
+            original_content_lines = content.splitlines()
+            start_line_idx = original_line_numbers[0] - 1
+            end_line_idx = original_line_numbers[-1]
+            original_text_block = "\n".join(original_content_lines[start_line_idx:end_line_idx])
+
+            matches.append({
+                "line_number": original_line_numbers[0],
+                "score": round(ratio, 4),
+                "text": original_text_block
+            })
+
     return sorted(matches, key=lambda x: x['score'], reverse=True)[:3]
 
 def smart_find(content: str, snippet: str) -> List[Tuple[int, int]]:
@@ -359,9 +396,14 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 print("  Did you mean one of these?")
                 for match in ctx['fuzzy_matches']:
                     print(f"    Line {match['line_number']} (Score: {match['score']}):")
-                    print(f"      Actual:   {visualize_str(match['text'])}")
-                    expected_first = ctx.get('snippet', '').strip().splitlines()[0] if ctx.get('snippet') else ""
-                    print(f"      Expected: {visualize_str(expected_first)}")
+                    # FIX: Properly print multi-line 'text' from fuzzy match
+                    print("      Actual:")
+                    for line in (match['text'] or "").splitlines():
+                        print(f"        {visualize_str(line)}")
+
+                    expected_first = (ctx.get('snippet') or "").strip().splitlines()
+                    if expected_first:
+                        print(f"      Expected (first line): {visualize_str(expected_first[0])}")
 
         return details
 
