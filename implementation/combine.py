@@ -44,13 +44,17 @@ def create_combined_file(source_dir, output_file):
                     outfile.write(f"=== BEGIN {relative_path} ===\n")
 
                     try:
-                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as infile:
-                            content = infile.read()
-                            outfile.write(content)
+                        if os.path.islink(file_path):
+                            symlink_target = os.readlink(file_path)
+                            outfile.write(f"[Symlink to: {symlink_target}]\n")
+                        else:
+                            with open(file_path, 'r', encoding='utf-8', errors='ignore') as infile:
+                                content = infile.read()
+                                outfile.write(content)
 
-                        # Add a newline only if the file doesn't already end with one.
-                        if content and not content.endswith('\n'):
-                            outfile.write('\n')
+                            # Add a newline only if the file doesn't already end with one.
+                            if content and not content.endswith('\n'):
+                                outfile.write('\n')
 
                     except Exception as e:
                         outfile.write(f"[Error reading file (likely binary): {e}]\n")
