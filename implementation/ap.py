@@ -208,6 +208,12 @@ def get_fuzzy_matches(content: str, snippet: str, cutoff: float = 0.7) -> List[D
     """
     if not snippet or not snippet.strip():
         return []
+    # PERFORMANCE GUARD:
+    # Fuzzy matching on large blocks is extremely expensive (O(N * M)).
+    # If the snippet is large (e.g. > 1KB or > 20 lines), skipping fuzzy match
+    # prevents the patcher from hanging on failure.
+    if len(snippet) > 1000 or len(snippet.splitlines()) > 20:
+        return []
 
     # Normalize the snippet once: remove blank lines and strip each line.
     normalized_snippet_lines = [line.strip() for line in snippet.strip().splitlines() if line.strip()]
