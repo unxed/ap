@@ -32,6 +32,11 @@ class PatchData(TypedDict):
     version: str
     changes: List[FileChange]
 
+def clean_lines(s: Optional[str]) -> Optional[str]:
+    """Removes trailing whitespace from each line of the input string."""
+    if s is None: return None
+    return '\n'.join(line.rstrip(' \t') for line in s.splitlines())
+
 def visualize_str(s: str) -> str:
     """Makes special characters visible for debugging."""
     if not isinstance(s, str): return repr(s)
@@ -582,7 +587,11 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     create_failure_case_file("afailed.log", err_details, original_content)
                 return report_error(err_details)
 
-            content_to_add = mod.get('content') # Use get, returns None if not present
+            # Clean inputs from the patch to avoid issues with trailing whitespace in the patch file itself.
+            content_to_add = clean_lines(mod.get('content'))
+            snippet_val = clean_lines(mod.get('snippet'))
+            snippet_tail = clean_lines(mod.get('snippet_tail'))
+            anchor_val = clean_lines(mod.get('anchor'))
 
             # === SAFE CREATE (File or Directory) ===
             if action == 'CREATE':
@@ -627,9 +636,6 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 working_content = (content_to_add or "").replace('\r\n', internal_newline).replace('\r', internal_newline)
                 break
 
-            snippet_val = mod.get('snippet')
-            snippet_tail = mod.get('snippet_tail')
-
             # Heuristic: If snippet_tail is identical to content, the AI likely confused "what to replace" with "what to replace it with".
             # Treat this as a point-based replacement.
             if snippet_val and snippet_tail and content_to_add:
@@ -665,7 +671,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         create_failure_case_file("afailed.log", err_details, original_content)
                     return report_error(err_details)
 
-                start_pos_info, error = find_target_in_content(working_content, mod.get('anchor'), snippet_val, debug, last_mod_end_pos)
+                start_pos_info, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos)
                 if not error:
                     start_range_begin, start_range_end = start_pos_info
                     end_occurrences = smart_find(working_content[start_range_end:], snippet_tail)
@@ -676,7 +682,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         target_pos = (start_range_begin, start_range_end + end_range_end_rel)
 
             elif snippet_val is not None:
-                 target_pos, error = find_target_in_content(working_content, mod.get('anchor'), snippet_val, debug, last_mod_end_pos)
+                 target_pos, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos)
 
             elif action != 'CREATE':
                 err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Modification requires locators."}}
@@ -690,7 +696,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 if action == 'DELETE' and error['code'] in error_codes:
                     debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet to delete is already gone.", snippet=snippet_val); is_idempotency_skip = True
                 if action == 'REPLACE' and error['code'] in error_codes:
-                    content_pos, _ = find_target_in_content(working_content, mod.get('anchor'), content_to_add or "", debug=False)
+                    content_pos, _ = find_target_in_content(working_content, anchor_val, content_to_add or "", debug=False)
                     if content_pos: debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet not found, but replacement content exists.", snippet=snippet_val); is_idempotency_skip = True
 
                 if is_idempotency_skip: continue
