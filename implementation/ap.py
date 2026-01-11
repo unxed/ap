@@ -785,7 +785,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 print(f"  + SUCCESS: Mod #{mod_idx + 1} ({action}) applied.")
 
         if not terminal_op_planned:
-            final_content = newline_char.join([line.rstrip(' \t') for line in working_content.split(internal_newline)])
+            final_content = newline_char.join([line for line in working_content.split(internal_newline)])
             if final_content != original_content or not file_existed:
                 write_plan.append(('WRITE', file_path, final_content, relative_path))
 
