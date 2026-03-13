@@ -65,7 +65,7 @@ def parse_ap3_format(patch_file: str) -> PatchData:
     current_modification = None
     reading_key = None
     value_lines = []
-    pending_args = None # To store args for delayed processing (e.g. CREATE_FILE)
+    pending_args = None # To store args for delayed processing (e.g. CREATE)
 
     header_pattern = re.compile(r'^([a-zA-Z0-9]{8})\s+AP\s+3\.1$')
     directive_pattern = None

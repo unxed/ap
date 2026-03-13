@@ -13,7 +13,7 @@ The `ap` format is built on a specific philosophy: **Adapt the tool to the AI, n
 Large Language Models are probabilistic, not deterministic. They struggle with strict counting (line numbers), rigid syntax (JSON/YAML), and perfect consistency. Traditional tools force the AI to perform tasks it is bad at. `ap` takes the opposite approach:
 
 1.  **Ambiguity is expected:** The tool should use heuristics (like context or locality) to resolve the "which function did you mean?" problem, rather than failing immediately.
-2.  **Flexibility is Key:** If an AI forgets to explicitly declare a `FILE` before a `CREATE_FILE` action, the tool should infer the intent from the context.
+2.  **Flexibility is Key:** If an AI forgets to explicitly declare a `FILE` before a `CREATE` action, the tool should infer the intent from the context.
 ## 1. Introduction
 
 ### 1.1. The Problem with Traditional and Structured Formats
