@@ -498,7 +498,30 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             if create_failure_case:
                 create_failure_case_file("afailed.log", err_details, None)
             return report_error(err_details)
-        relative_path = change['file_path']
+        original_relative_path = change['file_path']
+        relative_path = original_relative_path
+        stripped_prefix = None
+
+        # Path search heuristic (auto-detect if we are inside a subtree)
+        if not os.path.exists(os.path.join(project_dir, relative_path)):
+            parts = relative_path.replace('\\', '/').split('/')
+            found = False
+            for i in range(1, len(parts)):
+                test_path = '/'.join(parts[i:])
+                if os.path.exists(os.path.join(project_dir, test_path)):
+                    relative_path = test_path
+                    stripped_prefix = '/'.join(parts[:i])
+                    found = True
+                    break
+
+            if not found:
+                project_dir_abs = os.path.abspath(project_dir).replace('\\', '/')
+                for i in range(len(parts) - 1, 0, -1):
+                    prefix = '/'.join(parts[:i])
+                    if project_dir_abs.endswith('/' + prefix) or project_dir_abs == prefix:
+                        relative_path = '/'.join(parts[i:])
+                        stripped_prefix = prefix
+                        break
 
         # SECURITY: Perform path validation before any filesystem operations.
         real_project_dir = os.path.realpath(project_dir)
@@ -531,6 +554,12 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
         if 'rename_to' in change:
             new_relative_path = change['rename_to']
+            if stripped_prefix:
+                new_parts = new_relative_path.replace('\\', '/').split('/')
+                prefix_parts = stripped_prefix.split('/')
+                if new_parts[:len(prefix_parts)] == prefix_parts:
+                    new_relative_path = '/'.join(new_parts[len(prefix_parts):])
+
             new_file_path = os.path.join(project_dir, new_relative_path)
 
             try:
