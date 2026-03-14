@@ -1,9 +1,26 @@
 #!/usr/bin/env python3
 import os
 import argparse
+import shutil
 
 # Helper script to combine a whole folder of files into one text file
 # for exposing to LLMs
+
+def remove_git_folders(source_dir):
+    """
+    Recursively finds and removes all .git directories within source_dir.
+    """
+    print(f"Cleaning up .git directories in: {source_dir}...")
+    for root, dirs, files in os.walk(source_dir, topdown=False):
+        for name in dirs:
+            if name == '.git':
+                git_path = os.path.join(root, name)
+                try:
+                    # shutil.rmtree removes a directory and all its contents
+                    shutil.rmtree(git_path)
+                    print(f"  [Deleted] {git_path}")
+                except Exception as e:
+                    print(f"  [Error] Could not delete {git_path}: {e}")
 
 def create_combined_file(source_dir, output_file):
     """
@@ -14,12 +31,16 @@ def create_combined_file(source_dir, output_file):
     abs_source_path = os.path.abspath(source_dir)
     abs_output_file = os.path.abspath(output_file)
 
-    print(f"Source directory: {abs_source_path}")
-    print(f"Output file:      {abs_output_file}")
-
     if not os.path.isdir(abs_source_path):
         print(f"Error: Source directory '{source_dir}' not found.")
         return
+
+    # First, remove all .git folders
+    remove_git_folders(abs_source_path)
+
+    print(f"\nProcessing files...")
+    print(f"Source directory: {abs_source_path}")
+    print(f"Output file:      {abs_output_file}")
 
     try:
         with open(abs_output_file, 'w', encoding='utf-8') as outfile:
@@ -33,7 +54,9 @@ def create_combined_file(source_dir, output_file):
 
                     if os.path.abspath(file_path) == abs_output_file:
                         continue
-                    # Basic ignore patterns to avoid including VCS, pycache, etc.
+
+                    # Basic ignore patterns to avoid including VCS leftovers, pycache, etc.
+                    # Note: .git is already deleted, but we keep the check for safety.
                     if ".git" in file_path or "__pycache__" in file_path or file_path.endswith(".pyc"):
                         continue
 
