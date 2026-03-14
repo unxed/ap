@@ -118,6 +118,7 @@ def parse_ap3_format(patch_file: str) -> PatchData:
 
             parts = match.group(1).strip().split(maxsplit=1)
             key, args = parts[0], parts[1] if len(parts) > 1 else None
+            if key == 'CREATE_FILE': key = 'CREATE'
 
             ACTIONS = {'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE'}
             VALUE_KEYS = {'snippet', 'anchor', 'content', 'snippet_tail'}
@@ -624,6 +625,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
             # === SAFE CREATE (File or Directory) ===
             if action == 'CREATE':
+                error_to_report = None
                 # Case 1: Create a directory
                 if content_to_add is None:
                     # Idempotency check: if it's already a dir, we're done.
@@ -632,38 +634,53 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         break
                     # If it's a file, it's an error.
                     if os.path.exists(file_path):
-                        err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "PATH_IS_FILE", "message": "Cannot create directory, a file exists at the path."}}
-                        if create_failure_case: create_failure_case_file("afailed.log", err_details, original_content)
-                        return report_error(err_details)
+                        error_to_report = {"code": "PATH_IS_FILE", "message": "Cannot create directory, a file exists at the path."}
 
-                    # This is a directory creation, so it's a terminal action for this file block.
-                    write_plan.append(('CREATE_DIR', file_path, None, relative_path))
-                    terminal_op_planned = True
-                    working_content = "" # No further processing
-                    break
+                    if not error_to_report:
+                        # This is a directory creation, so it's a terminal action for this file block.
+                        write_plan.append(('CREATE_DIR', file_path, None, relative_path))
+                        terminal_op_planned = True
+                        working_content = "" # No further processing
+                        break
 
                 # Case 2: Create a file (content is not None)
-                if os.path.isfile(file_path):
-                    with open(file_path, 'r', encoding='utf-8', newline=None) as f_check:
-                        existing_content = f_check.read().replace('\r\n', internal_newline).replace('\r', internal_newline)
+                else:
+                    if os.path.isfile(file_path):
+                        with open(file_path, 'r', encoding='utf-8', newline=None) as f_check:
+                            existing_content = f_check.read().replace('\r\n', internal_newline).replace('\r', internal_newline)
 
-                    normalized_existing = "\n".join(l.strip() for l in existing_content.strip().splitlines())
-                    normalized_new = "\n".join(l.strip() for l in (content_to_add or "").strip().splitlines())
+                        normalized_existing = "\n".join(l.strip() for l in existing_content.strip().splitlines())
+                        normalized_new = "\n".join(l.strip() for l in (content_to_add or "").strip().splitlines())
 
-                    if normalized_existing == normalized_new:
-                        debug_print(debug, "IDEMPOTENCY SKIP", message="File exists with matching content.", file_path=file_path)
+                        if normalized_existing == normalized_new:
+                            debug_print(debug, "IDEMPOTENCY SKIP", message="File exists with matching content.", file_path=file_path)
+                            break
+                        elif not existing_content.strip():
+                            debug_print(debug, "OVERWRITE EMPTY", message="File exists but is empty. Overwriting.")
+                        else:
+                            error_to_report = {"code": "FILE_EXISTS", "message": "Target file exists and is not empty."}
+
+                    if not error_to_report:
+                        working_content = (content_to_add or "").replace('\r\n', internal_newline).replace('\r', internal_newline)
                         break
-                    elif not existing_content.strip():
-                        debug_print(debug, "OVERWRITE EMPTY", message="File exists but is empty. Overwriting.")
-                        pass
-                    else:
-                        err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "FILE_EXISTS", "message": "Target file exists and is not empty."}}
-                        if create_failure_case:
-                            create_failure_case_file("afailed.log", err_details, original_content)
-                        return report_error(err_details)
 
-                working_content = (content_to_add or "").replace('\r\n', internal_newline).replace('\r', internal_newline)
-                break
+                if error_to_report:
+                    report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error_to_report}
+                    if force and not silent:
+                        print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action')}) in '{relative_path}'. Reason: {error_to_report.get('message')}")
+                        if create_failure_case:
+                            create_failure_case_file(f"afailed.{mod_idx}.log", report, original_content)
+                        failed_file_block = next((item for item in failed_changes_output if item.get('file_path') == relative_path), None)
+                        if not failed_file_block:
+                            failed_file_block = {'file_path': relative_path, 'modifications': []}
+                            if change.get('newline'): failed_file_block['newline'] = change.get('newline')
+                            failed_changes_output.append(failed_file_block)
+                        failed_file_block['modifications'].append(mod)
+                        continue
+                    else:
+                        if create_failure_case:
+                            create_failure_case_file("afailed.log", report, original_content)
+                        return report_error(report)
 
             # Heuristic: If snippet_tail is identical to content, the AI likely confused "what to replace" with "what to replace it with".
             # Treat this as a point-based replacement.
