@@ -539,14 +539,23 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 raise ValueError("Path traversal detected.")
         except Exception: # Catches errors from invalid paths like on Windows
             err_details = {"status": "FAILED", "file_path": relative_path, "error": {"code": "INVALID_FILE_PATH", "message": "Path traversal detected or invalid path format."}}
-            if create_failure_case:
-                create_failure_case_file(os.path.join(project_dir, "afailed.log"), err_details, None)
-            return report_error(err_details)
+            if force:
+                if not silent: print("  - FAILED: Path traversal detected or invalid path format.")
+                if create_failure_case: create_failure_case_file(os.path.join(project_dir, "afailed.log"), err_details, None)
+                failed_changes_output.append(change)
+                continue
+            else:
+                if create_failure_case:
+                    create_failure_case_file(os.path.join(project_dir, "afailed.log"), err_details, None)
+                return report_error(err_details)
 
         file_path = os.path.join(project_dir, relative_path)
         newline_mode = change.get('newline')
         newline_char = {'LF': '\n', 'CRLF': '\r\n', 'CR': '\r'}.get(newline_mode) or (detect_line_endings(file_path) if os.path.exists(file_path) else os.linesep)
         debug_print(debug, "PLANNING FOR FILE", file=file_path, newline_mode=newline_mode or "DETECTED", detected_newline=newline_char)
+
+        if not silent:
+            print(f"\nFile: {relative_path}")
 
         terminal_op_planned = False
         # CONTEXTUAL FILE DELETION:
@@ -558,6 +567,8 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 debug_print(debug, "IDEMPOTENCY SKIP", message="Path to delete does not exist.", path=file_path)
                 continue
             write_plan.append(('DELETE_PATH', file_path, None, relative_path))
+            if not silent:
+                print("  + SUCCESS: File deleted.")
             continue
 
         if 'rename_to' in change:
@@ -576,8 +587,14 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     raise ValueError("Path traversal detected.")
             except Exception:
                 err_details = {"status": "FAILED", "file_path": relative_path, "error": {"code": "INVALID_FILE_PATH", "message": "Path traversal detected in new rename path."}}
-                if create_failure_case: create_failure_case_file(os.path.join(project_dir, "afailed.log"), err_details, None)
-                return report_error(err_details)
+                if force:
+                    if not silent: print("  - FAILED: Path traversal detected in new rename path.")
+                    if create_failure_case: create_failure_case_file(os.path.join(project_dir, "afailed.log"), err_details, None)
+                    failed_changes_output.append(change)
+                    continue
+                else:
+                    if create_failure_case: create_failure_case_file(os.path.join(project_dir, "afailed.log"), err_details, None)
+                    return report_error(err_details)
 
             if os.path.exists(new_file_path):
                 # Idempotency check: if source is gone but dest exists, we're good.
@@ -585,15 +602,29 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     debug_print(debug, "IDEMPOTENCY SKIP", message="Source does not exist, but destination does. Assuming rename complete.", old_path=file_path, new_path=new_file_path)
                     continue
                 err_details = {"status": "FAILED", "file_path": relative_path, "error": {"code": "DESTINATION_EXISTS", "message": "Rename destination already exists."}}
-                if create_failure_case: create_failure_case_file("afailed.log", err_details, None)
-                return report_error(err_details)
+                if force:
+                    if not silent: print("  - FAILED: Rename destination already exists.")
+                    if create_failure_case: create_failure_case_file("afailed.log", err_details, None)
+                    failed_changes_output.append(change)
+                    continue
+                else:
+                    if create_failure_case: create_failure_case_file("afailed.log", err_details, None)
+                    return report_error(err_details)
 
             if not os.path.exists(file_path):
                 err_details = {"status": "FAILED", "file_path": relative_path, "error": { "code": "FILE_NOT_FOUND", "message": "Target for rename not found." }}
-                if create_failure_case: create_failure_case_file("afailed.log", err_details, "")
-                return report_error(err_details)
+                if force:
+                    if not silent: print("  - FAILED: Target for rename not found.")
+                    if create_failure_case: create_failure_case_file("afailed.log", err_details, "")
+                    failed_changes_output.append(change)
+                    continue
+                else:
+                    if create_failure_case: create_failure_case_file("afailed.log", err_details, "")
+                    return report_error(err_details)
 
             write_plan.append(('RENAME', file_path, new_file_path, relative_path))
+            if not silent:
+                print(f"  + SUCCESS: Renamed to {new_relative_path}")
             continue
 
         original_content = ""
@@ -607,9 +638,15 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 original_content = ""
             else:
                 err_details = {"status": "FAILED", "file_path": relative_path, "error": { "code": "FILE_NOT_FOUND", "message": "Target file not found." }}
-                if create_failure_case:
-                    create_failure_case_file("afailed.log", err_details, "")
-                return report_error(err_details)
+                if force:
+                    if not silent: print("  - FAILED: Target file not found.")
+                    if create_failure_case: create_failure_case_file("afailed.log", err_details, "")
+                    failed_changes_output.append(change)
+                    continue
+                else:
+                    if create_failure_case:
+                        create_failure_case_file("afailed.log", err_details, "")
+                    return report_error(err_details)
 
         internal_newline = '\n'
         working_content = original_content.replace('\r\n', internal_newline).replace('\r', internal_newline)
@@ -619,10 +656,22 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             action = mod.get('action')
             debug_print(debug, f"MODIFICATION #{mod_idx+1}", action=action)
             if not action:
-                err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "'action' is required."}}
-                if create_failure_case:
-                    create_failure_case_file("afailed.log", err_details, original_content)
-                return report_error(err_details)
+                error = {"code": "INVALID_MODIFICATION", "message": "'action' is required.", "context": {}}
+                report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
+                if force:
+                    if not silent: print(f"  - FAILED: Mod #{mod_idx + 1} (Unknown). Reason: {error.get('message')}")
+                    if create_failure_case: create_failure_case_file(f"afailed.{mod_idx}.log", report, original_content)
+                    failed_file_block = next((item for item in failed_changes_output if item.get('file_path') == relative_path), None)
+                    if not failed_file_block:
+                        failed_file_block = {'file_path': relative_path, 'modifications': []}
+                        if change.get('newline'): failed_file_block['newline'] = change.get('newline')
+                        failed_changes_output.append(failed_file_block)
+                    failed_file_block['modifications'].append(mod)
+                    continue
+                else:
+                    if create_failure_case:
+                        create_failure_case_file("afailed.log", report, original_content)
+                    return report_error(report)
 
             # Clean inputs from the patch to avoid issues with trailing whitespace in the patch file itself.
             content_to_add = clean_lines(mod.get('content'))
@@ -648,6 +697,8 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         write_plan.append(('CREATE_DIR', file_path, None, relative_path))
                         terminal_op_planned = True
                         working_content = "" # No further processing
+                        if not silent:
+                            print(f"  + SUCCESS: Mod #{mod_idx + 1} (CREATE) applied.")
                         break
 
                 # Case 2: Create a file (content is not None)
@@ -669,12 +720,15 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
                     if not error_to_report:
                         working_content = (content_to_add or "").replace('\r\n', internal_newline).replace('\r', internal_newline)
+                        if not silent:
+                            print(f"  + SUCCESS: Mod #{mod_idx + 1} (CREATE) applied.")
                         break
 
                 if error_to_report:
                     report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error_to_report}
-                    if force and not silent:
-                        print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action')}) in '{relative_path}'. Reason: {error_to_report.get('message')}")
+                    if force:
+                        if not silent:
+                            print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action')}). Reason: {error_to_report.get('message')}")
                         if create_failure_case:
                             create_failure_case_file(f"afailed.{mod_idx}.log", report, original_content)
                         failed_file_block = next((item for item in failed_changes_output if item.get('file_path') == relative_path), None)
@@ -714,50 +768,43 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
             if snippet_tail is not None:
                 if snippet_val is None:
-                    err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Range requires 'snippet'."}}
-                    if create_failure_case:
-                        create_failure_case_file("afailed.log", err_details, original_content)
-                    return report_error(err_details)
-                if action not in ['REPLACE', 'DELETE']:
-                    err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range."}}
-                    if create_failure_case:
-                        create_failure_case_file("afailed.log", err_details, original_content)
-                    return report_error(err_details)
-
-                start_pos_info, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos)
-                if not error:
-                    start_range_begin, start_range_end = start_pos_info
-                    end_occurrences = smart_find(working_content[start_range_end:], snippet_tail)
-                    if not end_occurrences:
-                        error = {"code": "snippet_tail_NOT_FOUND", "message": "End snippet not found.", "context": {"snippet": snippet_val, "snippet_tail": snippet_tail}}
-                    else:
-                        end_range_begin_rel, end_range_end_rel = end_occurrences[0]
-                        target_pos = (start_range_begin, start_range_end + end_range_end_rel)
+                    error = {"code": "INVALID_MODIFICATION", "message": "Range requires 'snippet'.", "context": {}}
+                elif action not in ['REPLACE', 'DELETE']:
+                    error = {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range.", "context": {}}
+                else:
+                    start_pos_info, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos)
+                    if not error:
+                        start_range_begin, start_range_end = start_pos_info
+                        end_occurrences = smart_find(working_content[start_range_end:], snippet_tail)
+                        if not end_occurrences:
+                            error = {"code": "snippet_tail_NOT_FOUND", "message": "End snippet not found.", "context": {"snippet": snippet_val, "snippet_tail": snippet_tail}}
+                        else:
+                            end_range_begin_rel, end_range_end_rel = end_occurrences[0]
+                            target_pos = (start_range_begin, start_range_end + end_range_end_rel)
 
             elif snippet_val is not None:
                  target_pos, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos)
 
             elif action != 'CREATE':
-                err_details = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": {"code": "INVALID_MODIFICATION", "message": "Modification requires locators."}}
-                if create_failure_case:
-                    create_failure_case_file("afailed.log", err_details, original_content)
-                return report_error(err_details)
+                error = {"code": "INVALID_MODIFICATION", "message": "Modification requires locators.", "context": {}}
 
             if error:
                 is_idempotency_skip = False
                 error_codes = ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND', 'snippet_tail_NOT_FOUND']
-                if action == 'DELETE' and error['code'] in error_codes:
+                if action == 'DELETE' and error.get('code') in error_codes:
                     debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet to delete is already gone.", snippet=snippet_val); is_idempotency_skip = True
-                if action == 'REPLACE' and error['code'] in error_codes:
+                if action == 'REPLACE' and error.get('code') in error_codes:
                     content_pos, _ = find_target_in_content(working_content, anchor_val, content_to_add or "", debug=False)
                     if content_pos: debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet not found, but replacement content exists.", snippet=snippet_val); is_idempotency_skip = True
 
                 if is_idempotency_skip: continue
 
                 report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
+                if 'context' not in report['error']: report['error']['context'] = {}
                 report['error']['context']['action'] = action
-                if force and not silent:
-                    print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action')}) in '{relative_path}'. Reason: {error.get('message')}")
+                if force:
+                    if not silent:
+                        print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action')}). Reason: {error.get('message')}")
                     if create_failure_case:
                         create_failure_case_file(f"afailed.{mod_idx}.log", report, original_content)
                     failed_file_block = next((item for item in failed_changes_output if item.get('file_path') == relative_path), None)
@@ -834,7 +881,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 last_mod_end_pos = start_pos + len(indented_content)
             elif action == 'DELETE':
                 last_mod_end_pos = start_pos
-            if force and not silent:
+            if not silent:
                 print(f"  + SUCCESS: Mod #{mod_idx + 1} ({action}) applied.")
 
         if not terminal_op_planned:
