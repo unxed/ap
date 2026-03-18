@@ -54,6 +54,7 @@ The first non-comment line of an `ap` patch file MUST be the header directive:
 
 - `[ID]` is a unique identifier for the entire patch, which MUST be a sequence of 8 random characters, each being a valid hexadecimal character (digit 0–9 or a lowercase letter a–f). E.g., `a0b1c2f9`.
 - This `[ID]` MUST be used as a prefix for all subsequent directives within the same file.
+- The `[ID]` established in the header MUST be consistent and immutable throughout all subsequent directives within the same patch file.
 
 A unique ID is needed to strictly separate `ap` format directives from content without the need for escaping and without the risk of a line similar to the directive appearing in the source or destination file. This also allows for the application of `ap` patches to `ap` patches.
 
@@ -247,6 +248,9 @@ To create robust and minimal patches, an AI model MUST follow a specific hierarc
 - **Ensure Unique Locators**: Before finalizing output, the AI MUST double-check that any chosen `anchor` is unique within the file and any `snippet` without an `anchor` is also unique within the file.
 
 ### 4.4. Other notices
+## 4.5. Patch ID Consistency
+
+Once the patch `[ID]` is generated and included in the header, the AI MUST strictly adhere to this ID for all subsequent directives throughout the entire patch file. The `[ID]` MUST NOT be regenerated or changed in any part of the file after the header.
 
 The reference patcher ensures that output files always end with a newline. This is not required by the format, but it is preferred. All examples in the documentation take this behavior into account.
 
