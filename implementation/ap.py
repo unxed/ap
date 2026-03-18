@@ -135,10 +135,17 @@ def parse_ap3_format(patch_file: str) -> PatchData:
                 if not current_file_change: raise ValueError(f"Action '{key}' on line {line_num} before FILE.")
                 current_modification = {'action': key}
                 current_file_change['modifications'].append(current_modification)
-            elif key in FILE_STARTERS:
-                # Hybrid: acts as key-value (for path) AND action.
-                reading_key = 'CREATE_PATH'
-                pending_args = args
+            elif key == 'CREATE':
+                if current_file_change and 'file_path' in current_file_change:
+                    # Contextual Creation: CREATE used after FILE.
+                    # The following block is treated as content.
+                    current_modification = {'action': 'CREATE'}
+                    current_file_change['modifications'].append(current_modification)
+                    reading_key = 'content'
+                else:
+                    # Hybrid: acts as key-value (for path) AND action.
+                    reading_key = 'CREATE_PATH'
+                    pending_args = args
             elif key in VALUE_KEYS:
                 if args: raise ValueError(f"Directive '{key}' on line {line_num} takes no arguments.")
                 if not current_modification and current_file_change and key == 'content':
