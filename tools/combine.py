@@ -59,6 +59,10 @@ def create_combined_file(source_dir, output_file):
                     # Note: .git is already deleted, but we keep the check for safety.
                     if ".git" in file_path or "__pycache__" in file_path or file_path.endswith(".pyc"):
                         continue
+                    # Ignore common image file formats
+                    image_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.ico', '.tiff', '.webp')
+                    if filename.lower().endswith(image_extensions):
+                        continue
 
                     # Use relative path for a cleaner header
                     relative_path = os.path.relpath(file_path, abs_source_path)
