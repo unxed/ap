@@ -54,8 +54,14 @@ def debug_print(debug_flag: bool, title: str, **kwargs):
             print(f"  {key}: {visualize_str(value)}")
     print("--------------------" + "-" * len(title))
 
-def parse_ap3_format(patch_file: str) -> PatchData:
+def parse_ap3_format(patch_file: str, force: bool = False) -> PatchData:
     """Parses the AP 3.1 delimiter-based format into the standard internal dict structure."""
+    KEYWORDS = {
+        'FILE', 'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE', 'CREATE',
+        'snippet', 'anchor', 'content', 'snippet_tail', 'RENAME', 'LF', 'CRLF', 'CR',
+        'include_leading_blank_lines', 'include_trailing_blank_lines'
+    }
+
     with open(patch_file, 'r', encoding='utf-8') as f:
         lines = f.read().splitlines()
 
@@ -85,8 +91,27 @@ def parse_ap3_format(patch_file: str) -> PatchData:
 
     if not patch_id: return data
 
+    # Keywords to detect ID drift/hallucinations
+    KEYWORDS = {
+        'FILE', 'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE', 'CREATE',
+        'snippet', 'anchor', 'content', 'snippet_tail', 'RENAME', 'LF', 'CRLF', 'CR',
+        'include_leading_blank_lines', 'include_trailing_blank_lines'
+    }
+
     # Main parsing loop
     for line_num, line in line_iterator:
+        # Check for ID drift/hallucination
+        id_drift_match = re.match(r'^([a-zA-Z0-9]{8})\s+([A-Z_a-z]+)', line.strip())
+        if id_drift_match:
+            new_id, keyword = id_drift_match.groups()
+            if new_id != patch_id and keyword in KEYWORDS:
+                if force:
+                    print(f"  [FORCE] ID drift detected on line {line_num}: '{patch_id}' -> '{new_id}'. Adopting new ID.")
+                    patch_id = new_id
+                    directive_pattern = re.compile(rf'^{re.escape(patch_id)}\s+(.*)$')
+                else:
+                    raise ValueError(f"Patch ID mismatch on line {line_num}: expected '{patch_id}', found '{new_id}'. Use -f to force apply with ID correction.")
+
         match = directive_pattern.match(line)
         if match:
             if reading_key:
@@ -476,13 +501,12 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
         return details
 
-    if force and os.path.exists("afailed.ap"):
-        err_msg = "afailed.ap exists. Please remove or rename it before running with --force."
-        if json_report: return {"status": "FAILED", "error": {"code": "AFAILED_EXISTS", "message": err_msg}}
-        print(f"ERROR: {err_msg}")
-        exit(1)
+    afailed_path = os.path.join(project_dir, "afailed.ap")
+    if force and os.path.exists(afailed_path):
+        err_msg = f"afailed.ap exists at {afailed_path}. Please remove or rename it before running with --force."
+        return report_error({"status": "FAILED", "error": {"code": "AFAILED_EXISTS", "message": err_msg}})
 
-    try: data = parse_ap3_format(patch_file)
+    try: data = parse_ap3_format(patch_file, force=force)
     except (ValueError, FileNotFoundError) as e:
         err_details = {"status": "FAILED", "error": { "code": "INVALID_PATCH_FILE", "message": str(e) }}
         if create_failure_case:
@@ -804,15 +828,20 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 report['error']['context']['action'] = action
                 if force:
                     if not silent:
-                        print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action')}). Reason: {error.get('message')}")
+                        print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action') or 'Unknown'}). Reason: {error.get('message')}")
                     if create_failure_case:
                         create_failure_case_file(f"afailed.{mod_idx}.log", report, original_content)
+
+                    # Track failed mods to save them to afailed.ap later
                     failed_file_block = next((item for item in failed_changes_output if item.get('file_path') == relative_path), None)
                     if not failed_file_block:
                         failed_file_block = {'file_path': relative_path, 'modifications': []}
                         if change.get('newline'): failed_file_block['newline'] = change.get('newline')
                         failed_changes_output.append(failed_file_block)
+
                     failed_file_block['modifications'].append(mod)
+                    # Update cursor to 'pseudo-advance' so we can try the next mod
+                    last_mod_end_pos = last_mod_end_pos
                     continue
                 else:
                     if create_failure_case:
@@ -889,9 +918,6 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             if final_content != original_content or not file_existed:
                 write_plan.append(('WRITE', file_path, final_content, relative_path))
 
-    if not write_plan and failed_changes_output:
-        return {"status": "FAILED", "error": {"code": "MODIFICATION_FAILED", "message": "One or more modifications failed."}}
-
     if force and failed_changes_output:
         afailed_path = os.path.join(project_dir, "afailed.ap")
         with open(afailed_path, "w", encoding="utf-8") as f:
@@ -909,8 +935,6 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         if key in mod_item: f.write(f"{patch_id_str} {key} {mod_item[key]}\n")
                     f.write("\n")
         if not silent: print(f"\nWARNING: Some changes failed and were written to {afailed_path}")
-        if not write_plan:
-             return {"status": "FAILED", "error": {"code": "ALL_CHANGES_FAILED", "message": "All changes failed in force mode."}}
 
     if not dry_run:
         # Separate operations into phases to avoid conflicts (e.g., delete before create)
