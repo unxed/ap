@@ -52,7 +52,7 @@ Any lines at the beginning of the file starting with `#` are considered comments
 The first non-comment line of an `ap` patch file MUST be the header directive:
 `[ID] AP 3.1`
 
-- `[ID]` is a unique identifier for the entire patch, which MUST be a sequence of 8 random characters, each being a valid hexadecimal character (digit 0–9 or a lowercase letter a–f). E.g., `a0b1c2f9`.
+- `[ID]` is a unique identifier for the entire patch, which MUST be a sequence of exactly 8 random characters, each being a valid hexadecimal character (digit 0–9 or a lowercase letter a–f). E.g., `a0b1c2f9`. Semantic or descriptive names (e.g., `fix_bug`, `update_file`) MUST NOT be used.
 - This `[ID]` MUST be used as a prefix for all subsequent directives within the same file.
 - The `[ID]` established in the header MUST be consistent and immutable throughout all subsequent directives within the same patch file.
 
@@ -248,7 +248,9 @@ To create robust and minimal patches, an AI model MUST follow a specific hierarc
 - **Ensure Unique Locators**: Before finalizing output, the AI MUST double-check that any chosen `anchor` is unique within the file and any `snippet` without an `anchor` is also unique within the file.
 
 ### 4.4. Other notices
-## 4.5. Patch ID Consistency
+## 4.5. Patch ID Rules and Consistency
+
+**Never use Semantic Patch IDs:** The 8-character hex ID is designed to be a random sequence to avoid accidental collisions with the source code. An AI MUST NOT use descriptive words, project names, or action names (e.g., `add_function`, `fix_bug`) as the patch ID. It MUST be purely random hexadecimal.
 
 Once the patch `[ID]` is generated and included in the header, the AI MUST strictly adhere to this ID for all subsequent directives throughout the entire patch file. The `[ID]` MUST NOT be regenerated or changed in any part of the file after the header.
 

@@ -73,7 +73,7 @@ def parse_ap3_format(patch_file: str, force: bool = False) -> PatchData:
     value_lines = []
     pending_args = None # To store args for delayed processing (e.g. CREATE)
 
-    header_pattern = re.compile(r'^([a-zA-Z0-9]{8})\s+AP\s+3\.1$')
+    header_pattern = re.compile(r'^(\S+)\s+AP\s+3\.1$')
     directive_pattern = None
 
     line_iterator = iter(enumerate(lines, 1))
@@ -86,6 +86,13 @@ def parse_ap3_format(patch_file: str, force: bool = False) -> PatchData:
         match = header_pattern.match(stripped_line)
         if not match: raise ValueError(f"Invalid AP 3.1 header on line {line_num}.")
         patch_id = match.group(1)
+
+        if not re.match(r'^[0-9a-fA-F]{8}$', patch_id):
+            if force:
+                print(f"  [FORCE] Tolerating invalid non-hex or semantic patch ID: '{patch_id}'.")
+            else:
+                raise ValueError(f"Invalid patch ID '{patch_id}' on line {line_num}. ID MUST be exactly 8 hexadecimal characters. Use -f to force apply.")
+
         directive_pattern = re.compile(rf'^{re.escape(patch_id)}\s+(.*)$')
         break
 
@@ -101,7 +108,7 @@ def parse_ap3_format(patch_file: str, force: bool = False) -> PatchData:
     # Main parsing loop
     for line_num, line in line_iterator:
         # Check for ID drift/hallucination
-        id_drift_match = re.match(r'^([a-zA-Z0-9]{8})\s+([A-Z_a-z]+)', line.strip())
+        id_drift_match = re.match(r'^(\S+)\s+([A-Z_a-z]+)', line.strip())
         if id_drift_match:
             new_id, keyword = id_drift_match.groups()
             if new_id != patch_id and keyword in KEYWORDS:
@@ -517,7 +524,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
     try:
         with open(patch_file, 'r', encoding='utf-8') as f:
             for line in f:
-                match = re.match(r'^([a-zA-Z0-9]{8})\s+AP\s+3\.1$', line.strip())
+                match = re.match(r'^(\S+)\s+AP\s+3\.1$', line.strip())
                 if match: patch_id_str = match.group(1); break
     except: pass
 
