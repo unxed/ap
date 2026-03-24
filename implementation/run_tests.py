@@ -281,7 +281,7 @@ def run_negative_test(test_name, expected_code, debug=False):
 
         # Test failure reporting file creation
         fail_report_path = os.path.join(test_dir, "failure.json")
-        report = apply_patch(patch_file=patch_file, project_dir=test_dir, json_report=True, debug=debug, failure_report_path=fail_report_path)
+        report = apply_patch(patch_file=patch_file, project_dir=test_dir, json_report=True, debug=debug, strict=True, failure_report_path=fail_report_path)
 
         if report.get("status") != "FAILED":
             print(f"❌ FAILED: {test_name}. Expected FAILED status but got SUCCESS."); return False

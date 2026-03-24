@@ -8,6 +8,6 @@ class MyProcessor:
     def load_data(self, path):
         with open(path, 'r') as f:
             self.data = f.readlines()
-
+    
 def helper_function():
     pass

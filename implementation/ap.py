@@ -54,12 +54,12 @@ def debug_print(debug_flag: bool, title: str, **kwargs):
             print(f"  {key}: {visualize_str(value)}")
     print("--------------------" + "-" * len(title))
 
-def parse_ap3_format(patch_file: str, force: bool = False) -> PatchData:
+def parse_ap3_format(patch_file: str, strict: bool = False) -> PatchData:
     """Parses the AP 3.1 delimiter-based format into the standard internal dict structure."""
     KEYWORDS = {
         'FILE', 'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE', 'CREATE',
         'snippet', 'anchor', 'content', 'snippet_tail', 'RENAME', 'LF', 'CRLF', 'CR',
-        'include_leading_blank_lines', 'include_trailing_blank_lines'
+        'include_leading_blank_lines', 'include_trailing_blank_lines', 'END'
     }
 
     with open(patch_file, 'r', encoding='utf-8') as f:
@@ -81,43 +81,42 @@ def parse_ap3_format(patch_file: str, force: bool = False) -> PatchData:
     # Find header and patch_id
     for line_num, line in line_iterator:
         stripped_line = line.strip()
-        if not stripped_line or stripped_line.startswith('#'):
-            continue
         match = header_pattern.match(stripped_line)
-        if not match: raise ValueError(f"Invalid AP 3.1 header on line {line_num}.")
-        patch_id = match.group(1)
+        if match:
+            patch_id = match.group(1)
+            if not re.match(r'^[0-9a-fA-F]{8}$', patch_id):
+                if not strict:
+                    print(f"  [TOLERANT] Tolerating invalid non-hex or semantic patch ID: '{patch_id}'.")
+                else:
+                    raise ValueError(f"Invalid patch ID '{patch_id}' on line {line_num}. ID MUST be exactly 8 hexadecimal characters. Run without --strict to allow.")
 
-        if not re.match(r'^[0-9a-fA-F]{8}$', patch_id):
-            if force:
-                print(f"  [FORCE] Tolerating invalid non-hex or semantic patch ID: '{patch_id}'.")
-            else:
-                raise ValueError(f"Invalid patch ID '{patch_id}' on line {line_num}. ID MUST be exactly 8 hexadecimal characters. Use -f to force apply.")
+            directive_pattern = re.compile(rf'^{re.escape(patch_id)}\s+(.*)$')
+            break
 
-        directive_pattern = re.compile(rf'^{re.escape(patch_id)}\s+(.*)$')
-        break
+    if not patch_id:
+        raise ValueError("Valid AP 3.1 header not found in the file.")
 
-    if not patch_id: return data
-
-    # Keywords to detect ID drift/hallucinations
-    KEYWORDS = {
-        'FILE', 'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE', 'CREATE',
-        'snippet', 'anchor', 'content', 'snippet_tail', 'RENAME', 'LF', 'CRLF', 'CR',
-        'include_leading_blank_lines', 'include_trailing_blank_lines'
-    }
+    paramless = r'(REPLACE|INSERT_AFTER|INSERT_BEFORE|DELETE|CREATE|snippet|anchor|content|snippet_tail|RENAME|END)'
+    file_dir = r'(FILE(?:\s+(?:LF|CRLF|CR))?)'
+    include_dir = r'((?:include_leading_blank_lines|include_trailing_blank_lines)\s+\d+)'
+    drift_pattern = re.compile(rf'^(\S+)\s+({paramless}|{file_dir}|{include_dir})$')
 
     # Main parsing loop
     for line_num, line in line_iterator:
-        # Check for ID drift/hallucination
-        id_drift_match = re.match(r'^(\S+)\s+([A-Z_a-z]+)', line.strip())
+        stripped_line = line.strip()
+
+        # Check for ID drift/hallucination strictly on valid directive signatures
+        id_drift_match = drift_pattern.match(stripped_line)
         if id_drift_match:
-            new_id, keyword = id_drift_match.groups()
-            if new_id != patch_id and keyword in KEYWORDS:
-                if force:
-                    print(f"  [FORCE] ID drift detected on line {line_num}: '{patch_id}' -> '{new_id}'. Adopting new ID.")
+            new_id = id_drift_match.group(1)
+            keyword_part = id_drift_match.group(2).split()[0]
+            if new_id != patch_id and keyword_part in KEYWORDS:
+                if not strict:
+                    print(f"  [TOLERANT] ID drift detected on line {line_num}: '{patch_id}' -> '{new_id}'. Adopting new ID.")
                     patch_id = new_id
                     directive_pattern = re.compile(rf'^{re.escape(patch_id)}\s+(.*)$')
                 else:
-                    raise ValueError(f"Patch ID mismatch on line {line_num}: expected '{patch_id}', found '{new_id}'. Use -f to force apply with ID correction.")
+                    raise ValueError(f"Patch ID mismatch on line {line_num}: expected '{patch_id}', found '{new_id}'. Run without --strict to allow ID correction.")
 
         match = directive_pattern.match(line)
         if match:
@@ -158,7 +157,10 @@ def parse_ap3_format(patch_file: str, force: bool = False) -> PatchData:
             FILE_STARTERS = {'CREATE'} # Treated as hybrid Action/Value
             NEWLINE_VALS = {'LF', 'CRLF', 'CR'}
 
-            if key == 'FILE':
+            if key == 'END':
+                if args: raise ValueError(f"Directive '{key}' on line {line_num} takes no arguments.")
+                break
+            elif key == 'FILE':
                 current_file_change = {'modifications': []}
                 data['changes'].append(current_file_change)
                 if args and args in NEWLINE_VALS: current_file_change['newline'] = args
@@ -431,7 +433,7 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
     start_pos, end_pos = occurrences[0]
     return (start_pos + offset, end_pos + offset), {}
 
-def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_report: bool = False, debug: bool = False, force: bool = False, failure_report_path: str = None, create_failure_case: bool = False, silent: bool = False) -> Dict[str, Any]:
+def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_report: bool = False, debug: bool = False, strict: bool = False, failure_report_path: str = None, create_failure_case: bool = False, silent: bool = False) -> Dict[str, Any]:
     patch_content = ""
     try:
         with open(patch_file, 'r', encoding='utf-8') as f:
@@ -509,11 +511,11 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         return details
 
     afailed_path = os.path.join(project_dir, "afailed.ap")
-    if force and os.path.exists(afailed_path):
-        err_msg = f"afailed.ap exists at {afailed_path}. Please remove or rename it before running with --force."
+    if not strict and os.path.exists(afailed_path):
+        err_msg = f"afailed.ap exists at {afailed_path}. Please remove or rename it before running."
         return report_error({"status": "FAILED", "error": {"code": "AFAILED_EXISTS", "message": err_msg}})
 
-    try: data = parse_ap3_format(patch_file, force=force)
+    try: data = parse_ap3_format(patch_file, strict=strict)
     except (ValueError, FileNotFoundError) as e:
         err_details = {"status": "FAILED", "error": { "code": "INVALID_PATCH_FILE", "message": str(e) }}
         if create_failure_case:
@@ -538,7 +540,8 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 create_failure_case_file("afailed.log", err_details, None)
             return report_error(err_details)
         original_relative_path = change['file_path']
-        relative_path = original_relative_path
+        is_explicit_dir = original_relative_path.endswith('/') or original_relative_path.endswith('\\')
+        relative_path = original_relative_path.rstrip('/\\') or original_relative_path
         stripped_prefix = None
 
         # Path search heuristic (auto-detect if we are inside a subtree)
@@ -570,7 +573,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 raise ValueError("Path traversal detected.")
         except Exception: # Catches errors from invalid paths like on Windows
             err_details = {"status": "FAILED", "file_path": relative_path, "error": {"code": "INVALID_FILE_PATH", "message": "Path traversal detected or invalid path format."}}
-            if force:
+            if not strict:
                 if not silent: print("  - FAILED: Path traversal detected or invalid path format.")
                 if create_failure_case: create_failure_case_file(os.path.join(project_dir, "afailed.log"), err_details, None)
                 failed_changes_output.append(change)
@@ -618,7 +621,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     raise ValueError("Path traversal detected.")
             except Exception:
                 err_details = {"status": "FAILED", "file_path": relative_path, "error": {"code": "INVALID_FILE_PATH", "message": "Path traversal detected in new rename path."}}
-                if force:
+                if not strict:
                     if not silent: print("  - FAILED: Path traversal detected in new rename path.")
                     if create_failure_case: create_failure_case_file(os.path.join(project_dir, "afailed.log"), err_details, None)
                     failed_changes_output.append(change)
@@ -633,7 +636,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     debug_print(debug, "IDEMPOTENCY SKIP", message="Source does not exist, but destination does. Assuming rename complete.", old_path=file_path, new_path=new_file_path)
                     continue
                 err_details = {"status": "FAILED", "file_path": relative_path, "error": {"code": "DESTINATION_EXISTS", "message": "Rename destination already exists."}}
-                if force:
+                if not strict:
                     if not silent: print("  - FAILED: Rename destination already exists.")
                     if create_failure_case: create_failure_case_file("afailed.log", err_details, None)
                     failed_changes_output.append(change)
@@ -644,7 +647,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
             if not os.path.exists(file_path):
                 err_details = {"status": "FAILED", "file_path": relative_path, "error": { "code": "FILE_NOT_FOUND", "message": "Target for rename not found." }}
-                if force:
+                if not strict:
                     if not silent: print("  - FAILED: Target for rename not found.")
                     if create_failure_case: create_failure_case_file("afailed.log", err_details, "")
                     failed_changes_output.append(change)
@@ -669,7 +672,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 original_content = ""
             else:
                 err_details = {"status": "FAILED", "file_path": relative_path, "error": { "code": "FILE_NOT_FOUND", "message": "Target file not found." }}
-                if force:
+                if not strict:
                     if not silent: print("  - FAILED: Target file not found.")
                     if create_failure_case: create_failure_case_file("afailed.log", err_details, "")
                     failed_changes_output.append(change)
@@ -689,7 +692,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             if not action:
                 error = {"code": "INVALID_MODIFICATION", "message": "'action' is required.", "context": {}}
                 report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
-                if force:
+                if not strict:
                     if not silent: print(f"  - FAILED: Mod #{mod_idx + 1} (Unknown). Reason: {error.get('message')}")
                     if create_failure_case: create_failure_case_file(f"afailed.{mod_idx}.log", report, original_content)
                     failed_file_block = next((item for item in failed_changes_output if item.get('file_path') == relative_path), None)
@@ -714,7 +717,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             if action == 'CREATE':
                 error_to_report = None
                 # Case 1: Create a directory
-                if content_to_add is None:
+                if content_to_add is None or (content_to_add == "" and is_explicit_dir):
                     # Idempotency check: if it's already a dir, we're done.
                     if os.path.isdir(file_path):
                         debug_print(debug, "IDEMPOTENCY SKIP", message="Directory already exists.", path=file_path)
@@ -757,7 +760,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
                 if error_to_report:
                     report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error_to_report}
-                    if force:
+                    if not strict:
                         if not silent:
                             print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action')}). Reason: {error_to_report.get('message')}")
                         if create_failure_case:
@@ -833,7 +836,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
                 if 'context' not in report['error']: report['error']['context'] = {}
                 report['error']['context']['action'] = action
-                if force:
+                if not strict:
                     if not silent:
                         print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action') or 'Unknown'}). Reason: {error.get('message')}")
                     if create_failure_case:
@@ -925,10 +928,10 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             if final_content != original_content or not file_existed:
                 write_plan.append(('WRITE', file_path, final_content, relative_path))
 
-    if force and failed_changes_output:
+    if not strict and failed_changes_output:
         afailed_path = os.path.join(project_dir, "afailed.ap")
         with open(afailed_path, "w", encoding="utf-8") as f:
-            f.write(f"# Summary: Failed changes from a forced patch application.\n\n")
+            f.write(f"# Summary: Failed changes from a tolerant patch application.\n\n")
             f.write(f"{patch_id_str} AP 3.1\n\n")
             for change_item in failed_changes_output:
                 f.write(f"{patch_id_str} FILE")
@@ -1013,7 +1016,7 @@ if __name__ == '__main__':
     parser.add_argument("patch_file", help="Path to the .ap patch file.")
     parser.add_argument("--dir", default=".", help="The root directory of the source code.")
     parser.add_argument("--dry-run", action="store_true", help="Show changes without modifying files.")
-    parser.add_argument("-f", "--force", action="store_true", help="Force apply, skip atomicity and save failures to afailed.ap.")
+    parser.add_argument("-s", "--strict", action="store_true", help="Run in strict mode (enforce atomicity, 8-hex ID, no drift).")
     parser.add_argument("--json-report", action="store_true", help="Output machine-readable JSON on failure.")
     parser.add_argument("--failure-report", help="Path to save a detailed JSON report on failure (includes context).")
     parser.add_argument("--create-failure-case", action="store_true", help="On failure, create afailed.log (or afailed.<mod_idx>.log with --force) with full context for debugging.")
@@ -1021,7 +1024,7 @@ if __name__ == '__main__':
     parser.add_argument("-v", "--version", action="version", version="ap patcher 3.1")
 
     args = parser.parse_args()
-    result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug, args.force, args.failure_report, args.create_failure_case)
+    result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug, args.strict, args.failure_report, args.create_failure_case)
 
     if args.json_report and result['status'] != 'SUCCESS':
         print(json.dumps(result, indent=2))
