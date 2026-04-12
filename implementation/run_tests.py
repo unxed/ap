@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, sys, shutil, tempfile, difflib, json, argparse, hashlib
+import os, sys, shutil, tempfile, difflib, json, argparse, hashlib, io
 from os.path import isdir, isfile, join
 from ap import apply_patch
 
@@ -61,7 +61,27 @@ TESTS = [
     ("58_explicit_cr", "positive", None),
     ("59_error_create_file_on_dir", "negative", "FILE_WRITE_ERROR"),
     ("60_idempotent_create", "positive", None),
+    ("61_tolerant_comments", "positive", None),
+    ("62_tolerant_missing_header", "positive", None),
+    ("63_tolerant_anchor_as_snippet", "positive", None),
+    ("64_strict_rejects_comments", "negative", "INVALID_PATCH_FILE"),
+    ("65_strict_rejects_missing_header", "negative", "INVALID_PATCH_FILE"),
+    ("66_strict_rejects_anchor_as_snippet", "negative", "INVALID_MODIFICATION"),
 ]
+def generate_test_patches():
+    os.makedirs("patches", exist_ok=True)
+    with open("patches/61_tolerant_comments.ap", "w", encoding="utf-8") as f:
+        f.write("# comment before header\n61a00061 AP 3.1\n# comment between\n61a00061 FILE\ntolerant.txt\n# another comment\n61a00061 CREATE\n61a00061 content\nWorks!\n")
+    with open("patches/62_tolerant_missing_header.ap", "w", encoding="utf-8") as f:
+        f.write("# This patch completely lacks the AP 3.1 header\n62a00062 FILE\ntolerant.txt\n\n62a00062 CREATE\n62a00062 content\nWorks!\n")
+    with open("patches/63_tolerant_anchor_as_snippet.ap", "w", encoding="utf-8") as f:
+        f.write("63a00063 AP 3.1\n\n63a00063 FILE\n63_source.txt\n\n63a00063 REPLACE\n63a00063 anchor\nLine 1\n63a00063 content\nReplaced Line 1\n")
+    with open("patches/64_strict_rejects_comments.ap", "w", encoding="utf-8") as f:
+        f.write("# comment before header\n61a00061 AP 3.1\n# comment between\n61a00061 FILE\ntolerant.txt\n# another comment\n61a00061 CREATE\n61a00061 content\nWorks!\n")
+    with open("patches/65_strict_rejects_missing_header.ap", "w", encoding="utf-8") as f:
+        f.write("# This patch completely lacks the AP 3.1 header\n62a00062 FILE\ntolerant.txt\n\n62a00062 CREATE\n62a00062 content\nWorks!\n")
+    with open("patches/66_strict_rejects_anchor_as_snippet.ap", "w", encoding="utf-8") as f:
+        f.write("63a00063 AP 3.1\n\n63a00063 FILE\n63_source.txt\n\n63a00063 REPLACE\n63a00063 anchor\nLine 1\n63a00063 content\nReplaced Line 1\n")
 
 def get_paths(test_name):
     patch_file = os.path.join("patches", f"{test_name}.ap")
@@ -122,6 +142,12 @@ def get_paths(test_name):
         "58_explicit_cr": "58_explicit_cr.txt",
         "59_error_create_file_on_dir": "59_a_directory",
         "60_idempotent_create": "60_idempotent_create.txt",
+        "61_tolerant_comments": "dummy.txt",
+        "62_tolerant_missing_header": "dummy.txt",
+        "63_tolerant_anchor_as_snippet": "63_source.txt",
+        "64_strict_rejects_comments": "dummy.txt",
+        "65_strict_rejects_missing_header": "dummy.txt",
+        "66_strict_rejects_anchor_as_snippet": "63_source.txt",
     }
     src_filenames = file_map.get(test_name)
     if not src_filenames:
@@ -176,10 +202,10 @@ def run_positive_test(test_name, debug=False):
             else:
                 print(f"❌ FAILED: {test_name}. Idempotency check failed."); return False
 
-        force_apply = test_name == "52_force_success_part"
+        is_partial_success_test = test_name == "52_force_success_part"
         report = apply_patch(patch_file=patch_file, project_dir=test_dir, debug=debug)
 
-        if not force_apply and report.get("status") != "SUCCESS":
+        if not is_partial_success_test and report.get("status") != "SUCCESS":
             print(f"❌ FAILED: {test_name}. Patcher errored on a valid patch: {report.get('error')}")
             return False
 
@@ -207,6 +233,7 @@ def run_positive_test(test_name, debug=False):
         if test_name == "13_create_file": actual_file_rel_path = "new/created_file.txt"
         elif test_name == "26_implicit_create_file": actual_file_rel_path = "26_implicit_create_file.txt"
         elif test_name == "43_heuristic_implicit_create": actual_file_rel_path = "43_created.txt"
+        elif test_name in ["61_tolerant_comments", "62_tolerant_missing_header", "64_strict_rejects_comments", "65_strict_rejects_missing_header"]: actual_file_rel_path = "tolerant.txt"
         else: actual_file_rel_path = os.path.basename(src_file)
 
         actual_file_path = os.path.join(test_dir, actual_file_rel_path)
@@ -215,7 +242,7 @@ def run_positive_test(test_name, debug=False):
 
         with open(actual_file_path, 'rb') as f: actual_raw = f.read()
 
-        expected_file_path = os.path.join("expected", actual_file_rel_path) if test_name in ["13_create_file", "26_implicit_create_file", "43_heuristic_implicit_create"] else expected_file
+        expected_file_path = os.path.join("expected", actual_file_rel_path) if test_name in ["13_create_file", "26_implicit_create_file", "43_heuristic_implicit_create", "61_tolerant_comments", "62_tolerant_missing_header", "64_strict_rejects_comments", "65_strict_rejects_missing_header"] else expected_file
         with open(expected_file_path, 'rb') as f: expected_raw = f.read()
 
         if actual_raw == expected_raw:
@@ -225,40 +252,6 @@ def run_positive_test(test_name, debug=False):
             actual, expected = actual_raw.decode('utf-8', 'replace'), expected_raw.decode('utf-8', 'replace')
             diff = difflib.unified_diff(expected.splitlines(keepends=True), actual.splitlines(keepends=True), fromfile=expected_file_path, tofile="actual_result")
             print("--- DIFF ---\n" + ''.join(diff)); return False
-    finally:
-        shutil.rmtree(test_dir)
-def run_force_test(test_name, debug=False):
-    src_files, patch_file, expected_file = get_paths(test_name)
-    test_dir = tempfile.mkdtemp()
-    output_capture = io.StringIO()
-    try:
-        if debug: print(f"\n{'='*20} RUNNING FORCE TEST: {test_name} {'='*20}")
-
-        for src_path in src_files:
-            if os.path.exists(src_path):
-                shutil.copy(src_path, os.path.join(test_dir, os.path.basename(src_path)))
-
-        with contextlib.redirect_stdout(output_capture), contextlib.redirect_stderr(output_capture):
-            apply_patch(patch_file=patch_file, project_dir=test_dir, force=True, debug=debug)
-
-        afailed_path = os.path.join(test_dir, "afailed.ap")
-        if not os.path.exists(afailed_path):
-            print(f"❌ FAILED: {test_name}. afailed.ap was not created.")
-            print("--- CAPTURED OUTPUT ---\n" + output_capture.getvalue())
-            return False
-
-        with open(afailed_path, 'r', encoding='utf-8') as f_actual, \
-             open(expected_file, 'r', encoding='utf-8') as f_expected:
-            actual_content, expected_content = f_actual.read(), f_expected.read()
-            if actual_content.strip() != expected_content.strip():
-                print(f"❌ FAILED: {test_name}. afailed.ap content does not match expected.")
-                diff = difflib.unified_diff(expected_content.splitlines(keepends=True), actual_content.splitlines(keepends=True), fromfile=expected_file, tofile="actual_afailed.ap")
-                print("--- DIFF ---\n" + ''.join(diff))
-                print("--- CAPTURED OUTPUT ---\n" + output_capture.getvalue())
-                return False
-
-        print(f"✅ PASSED: {test_name} (Correctly reported failure)")
-        return True
     finally:
         shutil.rmtree(test_dir)
 
@@ -312,6 +305,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run the full test suite for the 'ap' patcher.")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging for each test.")
     args = parser.parse_args()
+    generate_test_patches()
 
     print("===========================\n  Running `ap` Test Suite\n===========================\n")
     results = []
@@ -321,8 +315,6 @@ def main():
                 results.append(run_positive_test(name, debug=args.debug))
             elif type == "negative":
                 results.append(run_negative_test(name, code, debug=args.debug))
-            elif type == "force":
-                results.append(run_force_test(name, code, debug=args.debug))
         except Exception as e:
             print(f"❌ CRITICAL FAILURE in test '{name}': {e}"); results.append(False)
 

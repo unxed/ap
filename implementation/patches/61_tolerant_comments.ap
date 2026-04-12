@@ -1,0 +1,9 @@
+# comment before header
+61a00061 AP 3.1
+# comment between
+61a00061 FILE
+tolerant.txt
+# another comment
+61a00061 CREATE
+61a00061 content
+Works!

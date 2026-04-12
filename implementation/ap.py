@@ -76,22 +76,35 @@ def parse_ap3_format(patch_file: str, strict: bool = False) -> PatchData:
     header_pattern = re.compile(r'^(\S+)\s+AP\s+3\.1$')
     directive_pattern = None
 
-    line_iterator = iter(enumerate(lines, 1))
+    start_idx = 0
 
     # Find header and patch_id
-    for line_num, line in line_iterator:
+    for i, line in enumerate(lines):
         stripped_line = line.strip()
+        if not stripped_line:
+            continue
+
         match = header_pattern.match(stripped_line)
         if match:
             patch_id = match.group(1)
             if not re.match(r'^[0-9a-fA-F]{8}$', patch_id):
-                if not strict:
-                    print(f"  [TOLERANT] Tolerating invalid non-hex or semantic patch ID: '{patch_id}'.")
-                else:
-                    raise ValueError(f"Invalid patch ID '{patch_id}' on line {line_num}. ID MUST be exactly 8 hexadecimal characters. Run without --strict to allow.")
+                if strict:
+                    raise ValueError(f"Invalid patch ID '{patch_id}' on line {i+1}. ID MUST be exactly 8 hexadecimal characters.")
+                print(f"  [TOLERANT] Tolerating invalid non-hex or semantic patch ID: '{patch_id}'.")
 
             directive_pattern = re.compile(rf'^{re.escape(patch_id)}\s+(.*)$')
+            start_idx = i + 1
             break
+
+        # В толерантном режиме мы проверяем, не пропустила ли LLM заголовок вовсе
+        if not strict:
+            potential_match = re.match(r'^([0-9a-fA-F]{8})\s+(FILE|REPLACE|INSERT_AFTER|INSERT_BEFORE|DELETE|CREATE|RENAME)$', stripped_line)
+            if potential_match:
+                patch_id = potential_match.group(1)
+                directive_pattern = re.compile(rf'^{re.escape(patch_id)}\s+(.*)$')
+                print(f"  [TOLERANT] Missing AP header. Auto-detected patch ID: '{patch_id}' from line {i+1}")
+                start_idx = i
+                break
 
     if not patch_id:
         raise ValueError("Valid AP 3.1 header not found in the file.")
@@ -102,7 +115,9 @@ def parse_ap3_format(patch_file: str, strict: bool = False) -> PatchData:
     drift_pattern = re.compile(rf'^(\S+)\s+({paramless}|{file_dir}|{include_dir})$')
 
     # Main parsing loop
-    for line_num, line in line_iterator:
+    for i in range(start_idx, len(lines)):
+        line = lines[i]
+        line_num = i + 1
         stripped_line = line.strip()
 
         # Check for ID drift/hallucination strictly on valid directive signatures
@@ -208,10 +223,15 @@ def parse_ap3_format(patch_file: str, strict: bool = False) -> PatchData:
                 current_file_change['newline'] = key
             else: raise ValueError(f"Unknown directive '{key}' on line {line_num}.")
 
-        elif reading_key: value_lines.append(line)
-        elif current_file_change and not reading_key and not line.strip():
-            # Allow blank lines between FILE and RENAME directives
+        elif reading_key:
+            if not strict and reading_key in ('path', 'RENAME', 'CREATE_PATH') and line.strip().startswith('#'):
+                pass # Ignore comments inside path values
+            else:
+                value_lines.append(line)
+        elif not reading_key and not line.strip():
             pass
+        elif not strict and not reading_key and line.strip().startswith('#'):
+            pass # Allow comments between directives in tolerant mode
         elif line.strip(): raise ValueError(f"Unexpected content on line {line_num}: '{line}'")
 
     if reading_key:
@@ -443,6 +463,10 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         # patch_content will be empty, which is acceptable for the failure case report.
         pass
 
+    def report_idempotency_skip(reason: str):
+        debug_print(debug, "IDEMPOTENCY SKIP", reason=reason)
+        if not silent:
+            print(f"  ~ SKIPPED (Idempotency): Looks like it's already applied. Reason: {reason}")
     def create_failure_case_file(filename: str, details: Dict[str, Any], original_content: Optional[str]):
         """Creates a detailed log file for a failed patch application for debugging."""
         try:
@@ -598,7 +622,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         mods = change.get('modifications', [])
         if len(mods) == 1 and mods[0].get('action') == 'DELETE' and len(mods[0]) == 1:
             if not os.path.exists(file_path):
-                debug_print(debug, "IDEMPOTENCY SKIP", message="Path to delete does not exist.", path=file_path)
+                report_idempotency_skip(f"Path to delete does not exist: {file_path}")
                 continue
             write_plan.append(('DELETE_PATH', file_path, None, relative_path))
             if not silent:
@@ -633,7 +657,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             if os.path.exists(new_file_path):
                 # Idempotency check: if source is gone but dest exists, we're good.
                 if not os.path.exists(file_path):
-                    debug_print(debug, "IDEMPOTENCY SKIP", message="Source does not exist, but destination does. Assuming rename complete.", old_path=file_path, new_path=new_file_path)
+                    report_idempotency_skip(f"Source does not exist, but destination does. Assuming rename complete: {new_file_path}")
                     continue
                 err_details = {"status": "FAILED", "file_path": relative_path, "error": {"code": "DESTINATION_EXISTS", "message": "Rename destination already exists."}}
                 if not strict:
@@ -713,6 +737,12 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             snippet_tail = clean_lines(mod.get('snippet_tail'))
             anchor_val = clean_lines(mod.get('anchor'))
 
+            if not strict and not snippet_val and anchor_val and action in ['REPLACE', 'DELETE', 'INSERT_AFTER', 'INSERT_BEFORE']:
+                snippet_val = anchor_val
+                anchor_val = None
+                if not silent:
+                    print(f"  [TOLERANT] Mod #{mod_idx + 1}: Missing 'snippet'. Using 'anchor' as snippet.")
+
             # === SAFE CREATE (File or Directory) ===
             if action == 'CREATE':
                 error_to_report = None
@@ -720,7 +750,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 if content_to_add is None or (content_to_add == "" and is_explicit_dir):
                     # Idempotency check: if it's already a dir, we're done.
                     if os.path.isdir(file_path):
-                        debug_print(debug, "IDEMPOTENCY SKIP", message="Directory already exists.", path=file_path)
+                        report_idempotency_skip("Directory already exists.")
                         break
                     # If it's a file, it's an error.
                     if os.path.exists(file_path):
@@ -745,7 +775,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         normalized_new = "\n".join(l.strip() for l in (content_to_add or "").strip().splitlines())
 
                         if normalized_existing == normalized_new:
-                            debug_print(debug, "IDEMPOTENCY SKIP", message="File exists with matching content.", file_path=file_path)
+                            report_idempotency_skip("File exists with matching content.")
                             break
                         elif not existing_content.strip():
                             debug_print(debug, "OVERWRITE EMPTY", message="File exists but is empty. Overwriting.")
@@ -826,10 +856,10 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 is_idempotency_skip = False
                 error_codes = ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND', 'snippet_tail_NOT_FOUND']
                 if action == 'DELETE' and error.get('code') in error_codes:
-                    debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet to delete is already gone.", snippet=snippet_val); is_idempotency_skip = True
+                    report_idempotency_skip("Snippet to delete is already gone."); is_idempotency_skip = True
                 if action == 'REPLACE' and error.get('code') in error_codes:
                     content_pos, _ = find_target_in_content(working_content, anchor_val, content_to_add or "", debug=False)
-                    if content_pos: debug_print(debug, "IDEMPOTENCY SKIP", message="Snippet not found, but replacement content exists.", snippet=snippet_val); is_idempotency_skip = True
+                    if content_pos: report_idempotency_skip("Snippet not found, but replacement content exists."); is_idempotency_skip = True
 
                 if is_idempotency_skip: continue
 
@@ -878,9 +908,9 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
             def normalize_block(text): return "\n".join(l.strip() for l in (text or "").strip().splitlines())
 
-            if action == 'REPLACE' and normalize_block(working_content[start_pos:end_pos]) == normalize_block(content_to_add): debug_print(debug, "IDEMPOTENCY SKIP", message="REPLACE content already present."); continue
-            elif action == 'INSERT_AFTER' and normalize_block(working_content[end_pos:]).startswith(normalize_block(content_to_add)): debug_print(debug, "IDEMPOTENCY SKIP", message="INSERT_AFTER content already present."); continue
-            elif action == 'INSERT_BEFORE' and normalize_block(working_content[:start_pos]).endswith(normalize_block(content_to_add)): debug_print(debug, "IDEMPOTENCY SKIP", message="INSERT_BEFORE content already present."); continue
+            if action == 'REPLACE' and normalize_block(working_content[start_pos:end_pos]) == normalize_block(content_to_add): report_idempotency_skip("REPLACE content already present."); continue
+            elif action == 'INSERT_AFTER' and normalize_block(working_content[end_pos:]).startswith(normalize_block(content_to_add)): report_idempotency_skip("INSERT_AFTER content already present."); continue
+            elif action == 'INSERT_BEFORE' and normalize_block(working_content[:start_pos]).endswith(normalize_block(content_to_add)): report_idempotency_skip("INSERT_BEFORE content already present."); continue
 
             if action == 'DELETE':
                 working_content = working_content[:start_pos] + working_content[end_pos:]
@@ -1019,7 +1049,7 @@ if __name__ == '__main__':
     parser.add_argument("-s", "--strict", action="store_true", help="Run in strict mode (enforce atomicity, 8-hex ID, no drift).")
     parser.add_argument("--json-report", action="store_true", help="Output machine-readable JSON on failure.")
     parser.add_argument("--failure-report", help="Path to save a detailed JSON report on failure (includes context).")
-    parser.add_argument("--create-failure-case", action="store_true", help="On failure, create afailed.log (or afailed.<mod_idx>.log with --force) with full context for debugging.")
+    parser.add_argument("--create-failure-case", action="store_true", help="On failure, create afailed.log (or afailed.<mod_idx>.log in tolerant mode) with full context for debugging.")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging.")
     parser.add_argument("-v", "--version", action="version", version="ap patcher 3.1")
 

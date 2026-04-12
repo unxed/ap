@@ -1,0 +1,7 @@
+# This patch completely lacks the AP 3.1 header
+62a00062 FILE
+tolerant.txt
+
+62a00062 CREATE
+62a00062 content
+Works!
