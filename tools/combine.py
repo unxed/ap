@@ -60,7 +60,7 @@ def create_combined_file(source_dir, output_file):
                     if ".git" in file_path or "__pycache__" in file_path or file_path.endswith(".pyc"):
                         continue
                     # Ignore common image file formats and compiled to wasm files
-                    image_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.ico', '.tiff', '.webp', '.wasm')
+                    image_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.ico', '.tiff', '.webp', '.wasm', '.woff2')
                     if filename.lower().endswith(image_extensions):
                         continue
 
