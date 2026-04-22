@@ -1,0 +1,19 @@
+# Summary: Test cursor updates during idempotency skips.
+68a00068 AP 3.1
+
+68a00068 FILE
+68_source.py
+
+68a00068 REPLACE
+68a00068 snippet
+print("A")
+68a00068 content
+print("A")
+
+68a00068 REPLACE
+68a00068 snippet
+print("A")
+68a00068 content
+print("B")
+
+

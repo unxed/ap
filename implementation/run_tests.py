@@ -67,6 +67,9 @@ TESTS = [
     ("64_strict_rejects_comments", "negative", "INVALID_PATCH_FILE"),
     ("65_strict_rejects_missing_header", "negative", "INVALID_PATCH_FILE"),
     ("66_strict_rejects_anchor_as_snippet", "negative", "INVALID_MODIFICATION"),
+    ("67_actions_after_create", "positive", None),
+    ("68_idempotency_cursor_desync", "positive", None),
+    ("69_delete_snippet_tail_not_found", "negative", "snippet_tail_NOT_FOUND"),
 ]
 def generate_test_patches():
     os.makedirs("patches", exist_ok=True)
@@ -148,6 +151,9 @@ def get_paths(test_name):
         "64_strict_rejects_comments": "dummy.txt",
         "65_strict_rejects_missing_header": "dummy.txt",
         "66_strict_rejects_anchor_as_snippet": "63_source.txt",
+        "67_actions_after_create": "dummy.txt",
+        "68_idempotency_cursor_desync": "68_source.py",
+        "69_delete_snippet_tail_not_found": "69_source.py",
     }
     src_filenames = file_map.get(test_name)
     if not src_filenames:
@@ -234,6 +240,7 @@ def run_positive_test(test_name, debug=False):
         elif test_name == "26_implicit_create_file": actual_file_rel_path = "26_implicit_create_file.txt"
         elif test_name == "43_heuristic_implicit_create": actual_file_rel_path = "43_created.txt"
         elif test_name in ["61_tolerant_comments", "62_tolerant_missing_header", "64_strict_rejects_comments", "65_strict_rejects_missing_header"]: actual_file_rel_path = "tolerant.txt"
+        elif test_name == "67_actions_after_create": actual_file_rel_path = "67_created.txt"
         else: actual_file_rel_path = os.path.basename(src_file)
 
         actual_file_path = os.path.join(test_dir, actual_file_rel_path)
@@ -242,7 +249,7 @@ def run_positive_test(test_name, debug=False):
 
         with open(actual_file_path, 'rb') as f: actual_raw = f.read()
 
-        expected_file_path = os.path.join("expected", actual_file_rel_path) if test_name in ["13_create_file", "26_implicit_create_file", "43_heuristic_implicit_create", "61_tolerant_comments", "62_tolerant_missing_header", "64_strict_rejects_comments", "65_strict_rejects_missing_header"] else expected_file
+        expected_file_path = os.path.join("expected", actual_file_rel_path) if test_name in ["13_create_file", "26_implicit_create_file", "43_heuristic_implicit_create", "61_tolerant_comments", "62_tolerant_missing_header", "64_strict_rejects_comments", "65_strict_rejects_missing_header", "67_actions_after_create"] else expected_file
         with open(expected_file_path, 'rb') as f: expected_raw = f.read()
 
         if actual_raw == expected_raw:

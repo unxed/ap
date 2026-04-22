@@ -1,0 +1,11 @@
+# Summary: Test that DELETE properly fails when snippet_tail is missing.
+69a00069 AP 3.1
+
+69a00069 FILE
+69_source.py
+
+69a00069 DELETE
+69a00069 snippet
+# START BLOCK
+69a00069 snippet_tail
+# CORRECT END

@@ -1,0 +1,2 @@
+print("A")
+print("B")

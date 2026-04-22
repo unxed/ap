@@ -1,0 +1,17 @@
+# Summary: Test that actions following a CREATE in the same file block are processed.
+67a00067 AP 3.1
+
+67a00067 FILE
+67_created.txt
+
+67a00067 CREATE
+67a00067 content
+Line 1
+Line 2
+Line 3
+
+67a00067 DELETE
+67a00067 snippet
+Line 2
+
+
