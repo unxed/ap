@@ -786,7 +786,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         working_content = (content_to_add or "").replace('\r\n', internal_newline).replace('\r', internal_newline)
                         if not silent:
                             print(f"  + SUCCESS: Mod #{mod_idx + 1} (CREATE) applied.")
-                        break
+                        continue
 
                 if error_to_report:
                     report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error_to_report}
@@ -854,15 +854,11 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
             if error:
                 is_idempotency_skip = False
-                error_codes = ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND', 'snippet_tail_NOT_FOUND']
-                if action == 'DELETE' and error.get('code') in error_codes:
+                if action == 'DELETE' and error.get('code') in ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND']:
                     report_idempotency_skip("Snippet to delete is already gone."); is_idempotency_skip = True
-                if action == 'REPLACE' and error.get('code') in error_codes:
+                if action == 'REPLACE' and error.get('code') in ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND', 'snippet_tail_NOT_FOUND']:
                     content_pos, _ = find_target_in_content(working_content, anchor_val, content_to_add or "", debug=False)
-                    if content_pos:
-                        report_idempotency_skip("Snippet not found, but replacement content exists.")
-                        last_mod_end_pos = content_pos[1]
-                        is_idempotency_skip = True
+                    if content_pos: report_idempotency_skip("Snippet not found, but replacement content exists."); is_idempotency_skip = True
 
                 if is_idempotency_skip: continue
 
