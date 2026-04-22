@@ -859,7 +859,10 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     report_idempotency_skip("Snippet to delete is already gone."); is_idempotency_skip = True
                 if action == 'REPLACE' and error.get('code') in error_codes:
                     content_pos, _ = find_target_in_content(working_content, anchor_val, content_to_add or "", debug=False)
-                    if content_pos: report_idempotency_skip("Snippet not found, but replacement content exists."); is_idempotency_skip = True
+                    if content_pos:
+                        report_idempotency_skip("Snippet not found, but replacement content exists.")
+                        last_mod_end_pos = content_pos[1]
+                        is_idempotency_skip = True
 
                 if is_idempotency_skip: continue
 
@@ -880,8 +883,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         failed_changes_output.append(failed_file_block)
 
                     failed_file_block['modifications'].append(mod)
-                    # Update cursor to 'pseudo-advance' so we can try the next mod
-                    last_mod_end_pos = last_mod_end_pos
+                    # We cannot safely advance the cursor after a failure, so it remains unchanged
                     continue
                 else:
                     if create_failure_case:
@@ -908,9 +910,18 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
             def normalize_block(text): return "\n".join(l.strip() for l in (text or "").strip().splitlines())
 
-            if action == 'REPLACE' and normalize_block(working_content[start_pos:end_pos]) == normalize_block(content_to_add): report_idempotency_skip("REPLACE content already present."); continue
-            elif action == 'INSERT_AFTER' and normalize_block(working_content[end_pos:]).startswith(normalize_block(content_to_add)): report_idempotency_skip("INSERT_AFTER content already present."); continue
-            elif action == 'INSERT_BEFORE' and normalize_block(working_content[:start_pos]).endswith(normalize_block(content_to_add)): report_idempotency_skip("INSERT_BEFORE content already present."); continue
+            if action == 'REPLACE' and normalize_block(working_content[start_pos:end_pos]) == normalize_block(content_to_add):
+                report_idempotency_skip("REPLACE content already present.")
+                last_mod_end_pos = end_pos
+                continue
+            elif action == 'INSERT_AFTER' and normalize_block(working_content[end_pos:]).startswith(normalize_block(content_to_add)):
+                report_idempotency_skip("INSERT_AFTER content already present.")
+                last_mod_end_pos = end_pos + len(content_to_add or "")
+                continue
+            elif action == 'INSERT_BEFORE' and normalize_block(working_content[:start_pos]).endswith(normalize_block(content_to_add)):
+                report_idempotency_skip("INSERT_BEFORE content already present.")
+                last_mod_end_pos = start_pos
+                continue
 
             if action == 'DELETE':
                 working_content = working_content[:start_pos] + working_content[end_pos:]
