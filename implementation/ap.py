@@ -914,7 +914,6 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
             if action == 'DELETE':
                 working_content = working_content[:start_pos] + working_content[end_pos:]
-                continue
 
             indented_content = content_to_add or ""
             if action in ['REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE'] and content_to_add:
