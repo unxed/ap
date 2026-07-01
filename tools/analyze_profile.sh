@@ -25,41 +25,49 @@ echo "Сбор данных и генерация отчета в $OUTPUT..."
     echo "## 1. Общая сводка (Summary)"
     echo "Общее время работы и количество сэмплов:"
     echo "\`\`\`text"
-    go tool pprof -text "$BINARY" "$PROFILE" | head -n 2
+    # Сохраняем весь вывод во временную переменную, чтобы избежать SIGPIPE при фильтрации
+    PPROF_TEXT=$(go tool pprof -text "$BINARY" "$PROFILE")
+    echo "$PPROF_TEXT" | head -n 2
     echo "\`\`\`"
     echo ""
 
     echo "## 2. Топ-$LIMIT функций по собственному времени (Flat Time)"
-    echo "Функции, в которых процессор провел больше всего времени непосредственно (без учета вызовов других функций):"
+    echo "Функции, в которых процессор провел больше всего времени непосредственно:"
     echo "\`\`\`text"
-    go tool pprof -text "$BINARY" "$PROFILE" | head -n $((LIMIT + 2))
+    echo "$PPROF_TEXT" | head -n $((LIMIT + 7))
     echo "\`\`\`"
     echo ""
 
-    echo "## 3. Топ-$LIMIT функций по суммарному времени (Cumulative Time)"
-    echo "Функции, выполнение которых (включая все вызванные ими подфункции) заняло больше всего времени:"
+    echo "## 3. Top-$LIMIT функций по суммарному времени (Cumulative Time)"
+    echo "Функции, выполнение которых (включая все подфункции) заняло больше всего времени:"
     echo "\`\`\`text"
-    go tool pprof -text -cum "$BINARY" "$PROFILE" | head -n $((LIMIT + 2))
+    go tool pprof -text -cum "$BINARY" "$PROFILE" | head -n $((LIMIT + 7))
     echo "\`\`\`"
     echo ""
 
     echo "## 4. Детальный построчный анализ кода (pprof list)"
-    echo "Ниже представлен построчный анализ для топ-$LIMIT функций (сортировка по Flat Time)."
-    echo "Показывает, сколько времени ушло на конкретные строки исходного кода."
+    echo "Ниже представлен построчный анализ для функций (сортировка по Flat Time)."
     echo ""
 
-    # Получаем список имен топ-функций (исключаем заголовок pprof)
-    FUNCTIONS=$(go tool pprof -text "$BINARY" "$PROFILE" | tail -n +3 | head -n "$LIMIT" | awk '{print $NF}')
+    # Извлекаем имена функций, фильтруя только строки, начинающиеся с цифр (данные профилирования).
+    # Это позволяет надежно пропустить заголовки pprof без использования head в конвейере.
+    FUNCTIONS=$(echo "$PPROF_TEXT" | awk -v limit="$LIMIT" '/^[[:space:]]*[0-9]/ { count++; if (count <= limit) print $NF }')
 
+    # Отключаем globbing (генерацию имен файлов по маске), так как имена функций содержат символы '*'
+    set -f
     for FUNC in $FUNCTIONS; do
         echo "### Функция: $FUNC"
         echo "\`\`\`text"
-        # Вызываем list для конкретной функции.
-        # Перенаправляем stderr в stdout, чтобы ошибки отсутствия исходников тоже попадали в отчет.
-        go tool pprof -list "$FUNC" "$BINARY" "$PROFILE" 2>&1 || echo "Не удалось получить исходный код для $FUNC"
+        
+        # Экранируем символы регулярных выражений (. * ( ) [ ] + ? ^ $ |), чтобы pprof корректно их обработал
+        CLEAN_FUNC=$(echo "$FUNC" | sed 's/[.()\[\]*+?^$\|]/\\&/g')
+        
+        # Запускаем list. Если исходники недоступны, pprof выведет ошибку, но скрипт продолжит работу.
+        go tool pprof -list "$CLEAN_FUNC" "$BINARY" "$PROFILE" 2>&1 || echo "Не удалось выполнить list для $FUNC"
         echo "\`\`\`"
         echo ""
     done
+    set +f
 
 } > "$OUTPUT"
 
