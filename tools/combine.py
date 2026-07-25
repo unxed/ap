@@ -57,7 +57,7 @@ def create_combined_file(source_dir, output_file):
 
                     # Basic ignore patterns to avoid including VCS leftovers, pycache, etc.
                     # Note: .git is already deleted, but we keep the check for safety.
-                    if ".git" in file_path or "__pycache__" in file_path or file_path.endswith(".pyc"):
+                    if (".git" in file_path and ".github" not in file_path) or "__pycache__" in file_path or file_path.endswith(".pyc"):
                         continue
                     # Ignore common image file formats and compiled to wasm files
                     image_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.ico', '.tiff', '.webp', '.wasm', '.woff2')
