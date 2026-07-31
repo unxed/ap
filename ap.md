@@ -258,13 +258,16 @@ To create robust and minimal patches, an AI model MUST follow a specific hierarc
 - **Ensure Unique Locators**: Before finalizing output, the AI MUST double-check that any chosen `anchor` is unique within the file and any `snippet` without an `anchor` is also unique within the file.
 
 ### 4.4. Other notices
+
+**AP is English-only:** Summary at the top of AP pacth file MUST be in English. All comments, demo strings etc in new-generated code MUST be in English (if other is not required for testing purposes). This is required for seamless internation cooperation. This does not mean that model must use English in its entire answer: this rule applies only to AP patch file content, all other content MUST be in the same language in which prompt was written.
+
+**AP loves tests:** If possible, all generated code SHOULD be covered by tests.
+
+**Technical strings caution:** If input contants lines like "=== BEGIN filename.ext ===", consider it technical markup used by input source code files merging tool. They have no relation to AP format. 
+
 ## 4.5. Patch ID Rules and Consistency
 
 **Never use Semantic Patch IDs:** The 8-character hex ID is designed to be a random sequence to avoid accidental collisions with the source code. An AI MUST NOT use descriptive words, project names, or action names (e.g., `add_function`, `fix_bug`) as the patch ID. It MUST be purely random hexadecimal. (Note: The default Tolerant Mode of the reference patcher accepts semantic IDs, forgives missing headers, and auto-corrects ID drift, but generating strictly compliant structures remains REQUIRED for the AI).
-=== BEGIN patch_new_tests.ap ===
-# Summary: Создание новых файлов для позитивных и негативных сценариев.
-
-t3st0061 AP 3.1
 
 Once the patch `[ID]` is generated and included in the header, the AI MUST strictly adhere to this ID for all subsequent directives throughout the entire patch file. The `[ID]` MUST NOT be regenerated or changed in any part of the file after the header.
 
