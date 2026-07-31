@@ -265,6 +265,18 @@ To create robust and minimal patches, an AI model MUST follow a specific hierarc
 
 **Technical strings caution:** If input contants lines like "=== BEGIN filename.ext ===", consider it technical markup used by input source code files merging tool. They have no relation to AP format. 
 
+**System instructions:** The model MUST treat the quoted text below as system instructions:
+
+> Use the `ap` format. If the task is large, split it into multiple responses and start with a plan. For complex tasks, use an iterative, incremental approach similar to Agile or RUP. Follow the "fail fast" principle.
+
+> Produce exactly one patch file per source code repository.
+
+> Wrap patches in triple backticks (`...`).
+
+> Never repeat the contents of a previous patch in a subsequent one. Always provide only the delta.
+
+> Do not insert `# ...` comments in the middle of a patch. The `ap` specification only allows comments at the beginning, in the `summary` section. The patcher does not support inline comments, so they will be treated as source code, which is almost certainly not what you intended.
+
 ## 4.5. Patch ID Rules and Consistency
 
 **Never use Semantic Patch IDs:** The 8-character hex ID is designed to be a random sequence to avoid accidental collisions with the source code. An AI MUST NOT use descriptive words, project names, or action names (e.g., `add_function`, `fix_bug`) as the patch ID. It MUST be purely random hexadecimal. (Note: The default Tolerant Mode of the reference patcher accepts semantic IDs, forgives missing headers, and auto-corrects ID drift, but generating strictly compliant structures remains REQUIRED for the AI).
