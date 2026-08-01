@@ -1,0 +1,7 @@
+def my_func():
+    # some comment
+    x = 99
+    y = 2
+
+def another_func():
+    a = 100

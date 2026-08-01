@@ -408,20 +408,33 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
 
         anchor_start, anchor_end = anchor_occurrences[0]
 
-        # === ROBUST OVERLAP DETECTION ===
+        # === ROBUST OVERLAP & CONTAINMENT DETECTION ===
         s_lines = [l.strip() for l in (snippet or "").strip().splitlines() if l.strip()]
         a_lines = [l.strip() for l in (anchor or "").strip().splitlines() if l.strip()]
         is_overlap = False
         if s_lines and a_lines:
-            # Check 1: Full inclusion (Snippet starts with Anchor)
-            if len(s_lines) >= len(a_lines) and s_lines[:len(a_lines)] == a_lines:
-                is_overlap = True
-            # Check 2: Partial overlap (Anchor ends with Snippet start)
-            elif a_lines[-1] == s_lines[0]:
-                is_overlap = True
+            # 1. Suffix/Prefix overlap: check if any suffix of a_lines matches a prefix of s_lines
+            for k in range(1, min(len(a_lines), len(s_lines)) + 1):
+                if a_lines[-k:] == s_lines[:k]:
+                    is_overlap = True
+                    break
+
+            # 2. Containment: check if s_lines is a sublist of a_lines
+            if not is_overlap:
+                for i in range(len(a_lines) - len(s_lines) + 1):
+                    if a_lines[i:i+len(s_lines)] == s_lines:
+                        is_overlap = True
+                        break
+
+            # 3. Containment: check if a_lines is a sublist of s_lines
+            if not is_overlap:
+                for i in range(len(s_lines) - len(a_lines) + 1):
+                    if s_lines[i:i+len(a_lines)] == a_lines:
+                        is_overlap = True
+                        break
 
         if is_overlap:
-             debug_print(debug, "OVERLAP DETECTED", message="Snippet overlaps with Anchor. Including Anchor in search scope.")
+             debug_print(debug, "OVERLAP DETECTED", message="Snippet overlaps with or is contained in Anchor. Including Anchor in search scope.")
              search_space, offset, anchor_found = content[anchor_start:], anchor_start, True
         else:
              search_space, offset, anchor_found = content[anchor_end:], anchor_end, True

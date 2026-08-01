@@ -74,6 +74,7 @@ TESTS = [
     ("71_recreate_idempotency", "positive", None),
     ("72_boundary_anchors_range", "positive", None),
     ("73_boundary_anchors_single", "positive", None),
+    ("74_robust_overlap", "positive", None),
 ]
 def generate_test_patches():
     os.makedirs("patches", exist_ok=True)
@@ -97,6 +98,12 @@ def generate_test_patches():
         f.write("# This patch completely lacks the AP 3.1 header\n62a00062 FILE\ntolerant.txt\n\n62a00062 CREATE\n62a00062 content\nWorks!\n")
     with open("patches/66_strict_rejects_anchor_as_snippet.ap", "w", encoding="utf-8") as f:
         f.write("63a00063 AP 3.1\n\n63a00063 FILE\n63_source.txt\n\n63a00063 REPLACE\n63a00063 anchor\nLine 1\n63a00063 content\nReplaced Line 1\n")
+    with open("src/74_source.txt", "w", encoding="utf-8") as f:
+        f.write("def my_func():\n    # some comment\n    x = 1\n    y = 2\n\ndef another_func():\n    a = 1\n")
+    with open("expected/74_source.txt", "w", encoding="utf-8") as f:
+        f.write("def my_func():\n    # some comment\n    x = 99\n    y = 2\n\ndef another_func():\n    a = 100\n")
+    with open("patches/74_robust_overlap.ap", "w", encoding="utf-8") as f:
+        f.write("74a00074 AP 3.1\n\n74a00074 FILE\n74_source.txt\n\n74a00074 REPLACE\n74a00074 anchor\ndef my_func():\n    # some comment\n    x = 1\n74a00074 snippet\n    # some comment\n    x = 1\n    y = 2\n74a00074 content\n    # some comment\n    x = 99\n    y = 2\n\n74a00074 REPLACE\n74a00074 anchor\ndef another_func():\n    a = 1\n74a00074 snippet\ndef another_func():\n    a = 1\n74a00074 content\ndef another_func():\n    a = 100\n")
 
 def get_paths(test_name):
     patch_file = os.path.join("patches", f"{test_name}.ap")
@@ -170,6 +177,7 @@ def get_paths(test_name):
         "71_recreate_idempotency": "71_source.txt",
         "72_boundary_anchors_range": "72_source.txt",
         "73_boundary_anchors_single": "73_source.txt",
+        "74_robust_overlap": "74_source.txt",
     }
     src_filenames = file_map.get(test_name)
     if not src_filenames:

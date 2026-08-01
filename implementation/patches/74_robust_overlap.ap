@@ -1,0 +1,29 @@
+74a00074 AP 3.1
+
+74a00074 FILE
+74_source.txt
+
+74a00074 REPLACE
+74a00074 anchor
+def my_func():
+    # some comment
+    x = 1
+74a00074 snippet
+    # some comment
+    x = 1
+    y = 2
+74a00074 content
+    # some comment
+    x = 99
+    y = 2
+
+74a00074 REPLACE
+74a00074 anchor
+def another_func():
+    a = 1
+74a00074 snippet
+def another_func():
+    a = 1
+74a00074 content
+def another_func():
+    a = 100
