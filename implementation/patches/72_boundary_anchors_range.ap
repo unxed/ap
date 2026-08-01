@@ -1,0 +1,12 @@
+72a00072 AP 3.1
+
+72a00072 FILE
+72_source.txt
+
+72a00072 REPLACE
+72a00072 snippet
+^
+72a00072 snippet_tail
+$
+72a00072 content
+Brand new start to end!

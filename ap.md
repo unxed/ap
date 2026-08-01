@@ -99,6 +99,7 @@ These directives mark the beginning of a new modification. The value MUST be one
 - `INSERT_BEFORE`: Insert content immediately before a snippet.
 - `DELETE`: Remove a snippet or range.
 - `CREATE`: Create a new file or directory.
+- `RECREATE`: Completely overwrite the target file's content with new content without requiring locator snippets.
 
 **Content and Locator Directives (KEY-VALUE)**
 **File Operation Directives**
@@ -119,7 +120,7 @@ a1b2c3d4 DELETE
 These directives provide the data for a modification. A `snippet` or `anchor` MUST be ignored by the Patcher if the action is `CREATE`.
 - `snippet`: A string of code to locate. If `snippet_tail` is also provided, this marks the beginning of the range.
 - `anchor`: An OPTIONAL string of code to narrow the search scope for a `snippet`.
-- `content`: The new code to be used for the operation. MUST be present for `REPLACE`, `INSERT_AFTER`, `INSERT_BEFORE`. For `CREATE`, its presence indicates file creation, and its absence indicates directory creation. MUST be omitted for `DELETE`.
+- `content`: The new code to be used for the operation. MUST be present for `REPLACE`, `INSERT_AFTER`, `INSERT_BEFORE`, and `RECREATE`. For `CREATE`, its presence indicates file creation, and its absence indicates directory creation. MUST be omitted for `DELETE`.
 - `snippet_tail`: An OPTIONAL string of code that marks the end of a range. It MUST be used together with `snippet`.
 
 **Option Directives (KEY-ARGS)**
@@ -153,6 +154,7 @@ A Patcher MUST apply modifications idempotently. Applying the same patch multipl
 - **`CREATE`**:
     - For files (when `content` is provided): If a file at the target path already exists and its content is identical to the provided `content`, the operation MUST be skipped. If the file exists with different content, the Patcher MUST report an error.
     - For directories (when `content` is absent): If a directory at the target path already exists, the operation is considered complete and MUST be skipped.
+- **`RECREATE`**: If the target file's content is already identical to the modification's `content`, the operation MUST be skipped.
 
 ### 3.2. Search and Location Algorithm
 
@@ -162,6 +164,12 @@ A Patcher MUST use a consistent, normalized search algorithm for locating an `an
 2.  Any line containing only whitespace is removed from this list.
 3.  Each remaining line has its leading and trailing whitespace removed.
 4.  The Patcher then searches the target file for a sequence of non-empty lines that, after normalization, are identical to the processed list of lines from the text being sought.
+
+**File Boundary Anchors**:
+The Patcher MUST support special boundary anchor markers for range and point operations to match the absolute beginning or end of a file:
+- A `snippet` with the value `^` represents the absolute beginning of the file (character offset 0).
+- A `snippet` (or `snippet_tail` in range operations) with the value `$` represents the absolute end of the file (character offset at the very end of the file content).
+When these boundary markers are used, normal text searching for them is bypassed, and they are resolved directly to the file boundaries.
 
 **Scoping**: If an `anchor` is provided, the Patcher MUST first locate its unique occurrence using the normalized search strategy. The subsequent normalized search for the `snippet` MUST be performed only starting from the line next to the last line of that `anchor`. If the `anchor` is not found, the Patcher MUST report an error.
 

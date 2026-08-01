@@ -57,7 +57,7 @@ def debug_print(debug_flag: bool, title: str, **kwargs):
 def parse_ap3_format(patch_file: str, strict: bool = False) -> PatchData:
     """Parses the AP 3.1 delimiter-based format into the standard internal dict structure."""
     KEYWORDS = {
-        'FILE', 'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE', 'CREATE',
+        'FILE', 'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE', 'CREATE', 'RECREATE',
         'snippet', 'anchor', 'content', 'snippet_tail', 'RENAME', 'LF', 'CRLF', 'CR',
         'include_leading_blank_lines', 'include_trailing_blank_lines', 'END'
     }
@@ -109,7 +109,7 @@ def parse_ap3_format(patch_file: str, strict: bool = False) -> PatchData:
     if not patch_id:
         raise ValueError("Valid AP 3.1 header not found in the file.")
 
-    paramless = r'(REPLACE|INSERT_AFTER|INSERT_BEFORE|DELETE|CREATE|snippet|anchor|content|snippet_tail|RENAME|END)'
+    paramless = r'(RECREATE|REPLACE|INSERT_AFTER|INSERT_BEFORE|DELETE|CREATE|snippet|anchor|content|snippet_tail|RENAME|END)'
     file_dir = r'(FILE(?:\s+(?:LF|CRLF|CR))?)'
     include_dir = r'((?:include_leading_blank_lines|include_trailing_blank_lines)\s+\d+)'
     drift_pattern = re.compile(rf'^(\S+)\s+({paramless}|{file_dir}|{include_dir})$')
@@ -166,7 +166,7 @@ def parse_ap3_format(patch_file: str, strict: bool = False) -> PatchData:
             key, args = parts[0], parts[1] if len(parts) > 1 else None
             if key == 'CREATE_FILE': key = 'CREATE'
 
-            ACTIONS = {'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE'}
+            ACTIONS = {'RECREATE', 'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE'}
             VALUE_KEYS = {'snippet', 'anchor', 'content', 'snippet_tail'}
             ARG_KEYS = {'include_leading_blank_lines', 'include_trailing_blank_lines'}
             FILE_STARTERS = {'CREATE'} # Treated as hybrid Action/Value
@@ -352,6 +352,12 @@ def smart_find(content: str, snippet: str) -> List[Tuple[int, int]]:
     return occurrences
 
 def find_target_in_content(content: str, anchor: Optional[str], snippet: str, debug: bool = False, last_match_end: int = 0) -> Tuple[Optional[Tuple[int, int]], Dict[str, Any]]:
+    if not anchor:
+        if snippet and snippet.strip() == '^':
+            return (0, 0), {}
+        if snippet and snippet.strip() == '$':
+            return (len(content), len(content)), {}
+
     search_space, offset, anchor_found = content, 0, None
 
     if anchor:
@@ -692,7 +698,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         elif file_existed:
             with open(file_path, 'r', encoding='utf-8', newline=None) as f: original_content = f.read()
         else: # File does not exist
-            if any(mod.get('action') == 'CREATE' for mod in change.get('modifications', [])):
+            if any(mod.get('action') in ('CREATE', 'RECREATE') for mod in change.get('modifications', [])):
                 original_content = ""
             else:
                 err_details = {"status": "FAILED", "file_path": relative_path, "error": { "code": "FILE_NOT_FOUND", "message": "Target file not found." }}
@@ -713,6 +719,18 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         for mod_idx, mod in enumerate(change.get('modifications', [])):
             action = mod.get('action')
             debug_print(debug, f"MODIFICATION #{mod_idx+1}", action=action)
+
+            content_to_add = clean_lines(mod.get('content'))
+
+            if action == 'RECREATE':
+                if working_content == (content_to_add or ""):
+                    report_idempotency_skip("RECREATE content already matches.")
+                    continue
+                working_content = content_to_add or ""
+                last_mod_end_pos = len(working_content)
+                if not silent:
+                    print(f"  + SUCCESS: Mod #{mod_idx + 1} (RECREATE) applied.")
+                continue
             if not action:
                 error = {"code": "INVALID_MODIFICATION", "message": "'action' is required.", "context": {}}
                 report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
@@ -732,7 +750,6 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     return report_error(report)
 
             # Clean inputs from the patch to avoid issues with trailing whitespace in the patch file itself.
-            content_to_add = clean_lines(mod.get('content'))
             snippet_val = clean_lines(mod.get('snippet'))
             snippet_tail = clean_lines(mod.get('snippet_tail'))
             anchor_val = clean_lines(mod.get('anchor'))
@@ -836,15 +853,23 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 elif action not in ['REPLACE', 'DELETE']:
                     error = {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range.", "context": {}}
                 else:
-                    start_pos_info, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos)
+                    if snippet_val and snippet_val.strip() == '^':
+                        start_range_begin, start_range_end = 0, 0
+                        error = None
+                    else:
+                        start_pos_info, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos)
+                        if not error: start_range_begin, start_range_end = start_pos_info
+
                     if not error:
-                        start_range_begin, start_range_end = start_pos_info
-                        end_occurrences = smart_find(working_content[start_range_end:], snippet_tail)
-                        if not end_occurrences:
-                            error = {"code": "snippet_tail_NOT_FOUND", "message": "End snippet not found.", "context": {"snippet": snippet_val, "snippet_tail": snippet_tail}}
+                        if snippet_tail and snippet_tail.strip() == '$':
+                            target_pos = (start_range_begin, len(working_content))
                         else:
-                            end_range_begin_rel, end_range_end_rel = end_occurrences[0]
-                            target_pos = (start_range_begin, start_range_end + end_range_end_rel)
+                            end_occurrences = smart_find(working_content[start_range_end:], snippet_tail)
+                            if not end_occurrences:
+                                error = {"code": "snippet_tail_NOT_FOUND", "message": "End snippet not found.", "context": {"snippet": snippet_val, "snippet_tail": snippet_tail}}
+                            else:
+                                end_range_begin_rel, end_range_end_rel = end_occurrences[0]
+                                target_pos = (start_range_begin, start_range_end + end_range_end_rel)
 
             elif snippet_val is not None:
                  target_pos, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos)

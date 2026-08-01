@@ -1,0 +1,16 @@
+73a00073 AP 3.1
+
+73a00073 FILE
+73_source.txt
+
+73a00073 INSERT_BEFORE
+73a00073 snippet
+^
+73a00073 content
+Header Line
+
+73a00073 INSERT_AFTER
+73a00073 snippet
+$
+73a00073 content
+Footer Line

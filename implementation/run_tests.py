@@ -70,9 +70,21 @@ TESTS = [
     ("67_actions_after_create", "positive", None),
     ("68_idempotency_cursor_desync", "positive", None),
     ("69_delete_snippet_tail_not_found", "negative", "snippet_tail_NOT_FOUND"),
+    ("70_recreate_file", "positive", None),
+    ("71_recreate_idempotency", "positive", None),
+    ("72_boundary_anchors_range", "positive", None),
+    ("73_boundary_anchors_single", "positive", None),
 ]
 def generate_test_patches():
     os.makedirs("patches", exist_ok=True)
+    with open("patches/70_recreate_file.ap", "w", encoding="utf-8") as f:
+        f.write("70a00070 AP 3.1\n\n70a00070 FILE\n70_source.txt\n\n70a00070 RECREATE\n70a00070 content\nThis is a completely recreated file content.\n")
+    with open("patches/71_recreate_idempotency.ap", "w", encoding="utf-8") as f:
+        f.write("71a00071 AP 3.1\n\n71a00071 FILE\n71_source.txt\n\n71a00071 RECREATE\n71a00071 content\nThis is already recreated.\n")
+    with open("patches/72_boundary_anchors_range.ap", "w", encoding="utf-8") as f:
+        f.write("72a00072 AP 3.1\n\n72a00072 FILE\n72_source.txt\n\n72a00072 REPLACE\n72a00072 snippet\n^\n72a00072 snippet_tail\n$\n72a00072 content\nBrand new start to end!\n")
+    with open("patches/73_boundary_anchors_single.ap", "w", encoding="utf-8") as f:
+        f.write("73a00073 AP 3.1\n\n73a00073 FILE\n73_source.txt\n\n73a00073 INSERT_BEFORE\n73a00073 snippet\n^\n73a00073 content\nHeader Line\n\n73a00073 INSERT_AFTER\n73a00073 snippet\n$\n73a00073 content\nFooter Line\n")
     with open("patches/61_tolerant_comments.ap", "w", encoding="utf-8") as f:
         f.write("# comment before header\n61a00061 AP 3.1\n# comment between\n61a00061 FILE\ntolerant.txt\n# another comment\n61a00061 CREATE\n61a00061 content\nWorks!\n")
     with open("patches/62_tolerant_missing_header.ap", "w", encoding="utf-8") as f:
@@ -154,6 +166,10 @@ def get_paths(test_name):
         "67_actions_after_create": "dummy.txt",
         "68_idempotency_cursor_desync": "68_source.py",
         "69_delete_snippet_tail_not_found": "69_source.py",
+        "70_recreate_file": "70_source.txt",
+        "71_recreate_idempotency": "71_source.txt",
+        "72_boundary_anchors_range": "72_source.txt",
+        "73_boundary_anchors_single": "73_source.txt",
     }
     src_filenames = file_map.get(test_name)
     if not src_filenames:

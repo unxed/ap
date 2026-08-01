@@ -1,0 +1,8 @@
+70a00070 AP 3.1
+
+70a00070 FILE
+70_source.txt
+
+70a00070 RECREATE
+70a00070 content
+This is a completely recreated file content.
