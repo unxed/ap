@@ -1,0 +1,18 @@
+75a00075 AP 3.1
+
+75a00075 FILE
+75_source.py
+
+75a00075 REPLACE
+75a00075 snippet
+    result = 100
+75a00075 content
+    # Intermediate step
+    result = 100
+    result += 50
+
+75a00075 REPLACE
+75a00075 snippet
+    result += 50
+75a00075 content
+    result += 99

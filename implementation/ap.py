@@ -727,275 +727,288 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
         internal_newline = '\n'
         working_content = original_content.replace('\r\n', internal_newline).replace('\r', internal_newline)
-        last_mod_end_pos = 0
+        pending_mods = list(enumerate(change.get('modifications', [])))
+        final_failed_mods = []
+        pass_number = 1
 
-        for mod_idx, mod in enumerate(change.get('modifications', [])):
-            action = mod.get('action')
-            debug_print(debug, f"MODIFICATION #{mod_idx+1}", action=action)
+        while pending_mods:
+            made_progress = False
+            failed_in_this_pass = []
+            last_mod_end_pos = 0
 
-            content_to_add = clean_lines(mod.get('content'))
+            for mod_idx, mod in pending_mods:
+                action = mod.get('action')
+                debug_print(debug, f"MODIFICATION #{mod_idx+1} (Pass {pass_number})", action=action)
 
-            if action == 'RECREATE':
-                if working_content == (content_to_add or ""):
-                    report_idempotency_skip("RECREATE content already matches.")
-                    continue
-                working_content = content_to_add or ""
-                last_mod_end_pos = len(working_content)
-                if not silent:
-                    print(f"  + SUCCESS: Mod #{mod_idx + 1} (RECREATE) applied.")
-                continue
-            if not action:
-                error = {"code": "INVALID_MODIFICATION", "message": "'action' is required.", "context": {}}
-                report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
-                if not strict:
-                    if not silent: print(f"  - FAILED: Mod #{mod_idx + 1} (Unknown). Reason: {error.get('message')}")
-                    if create_failure_case: create_failure_case_file(f"afailed.{mod_idx}.log", report, original_content)
-                    failed_file_block = next((item for item in failed_changes_output if item.get('file_path') == relative_path), None)
-                    if not failed_file_block:
-                        failed_file_block = {'file_path': relative_path, 'modifications': []}
-                        if change.get('newline'): failed_file_block['newline'] = change.get('newline')
-                        failed_changes_output.append(failed_file_block)
-                    failed_file_block['modifications'].append(mod)
-                    continue
-                else:
-                    if create_failure_case:
-                        create_failure_case_file("afailed.log", report, original_content)
-                    return report_error(report)
+                content_to_add = clean_lines(mod.get('content'))
 
-            # Clean inputs from the patch to avoid issues with trailing whitespace in the patch file itself.
-            snippet_val = clean_lines(mod.get('snippet'))
-            snippet_tail = clean_lines(mod.get('snippet_tail'))
-            anchor_val = clean_lines(mod.get('anchor'))
-
-            if not strict and not snippet_val and anchor_val and action in ['REPLACE', 'DELETE', 'INSERT_AFTER', 'INSERT_BEFORE']:
-                snippet_val = anchor_val
-                anchor_val = None
-                if not silent:
-                    print(f"  [TOLERANT] Mod #{mod_idx + 1}: Missing 'snippet'. Using 'anchor' as snippet.")
-
-            # === SAFE CREATE (File or Directory) ===
-            if action == 'CREATE':
-                error_to_report = None
-                # Case 1: Create a directory
-                if content_to_add is None or (content_to_add == "" and is_explicit_dir):
-                    # Idempotency check: if it's already a dir, we're done.
-                    if os.path.isdir(file_path):
-                        report_idempotency_skip("Directory already exists.")
-                        break
-                    # If it's a file, it's an error.
-                    if os.path.exists(file_path):
-                        error_to_report = {"code": "PATH_IS_FILE", "message": "Cannot create directory, a file exists at the path."}
-
-                    if not error_to_report:
-                        # This is a directory creation, so it's a terminal action for this file block.
-                        write_plan.append(('CREATE_DIR', file_path, None, relative_path))
-                        terminal_op_planned = True
-                        working_content = "" # No further processing
-                        if not silent:
-                            print(f"  + SUCCESS: Mod #{mod_idx + 1} (CREATE) applied.")
-                        break
-
-                # Case 2: Create a file (content is not None)
-                else:
-                    if os.path.isfile(file_path):
-                        with open(file_path, 'r', encoding='utf-8', newline=None) as f_check:
-                            existing_content = f_check.read().replace('\r\n', internal_newline).replace('\r', internal_newline)
-
-                        normalized_existing = "\n".join(l.strip() for l in existing_content.strip().splitlines())
-                        normalized_new = "\n".join(l.strip() for l in (content_to_add or "").strip().splitlines())
-
-                        if normalized_existing == normalized_new:
-                            report_idempotency_skip("File exists with matching content.")
-                            break
-                        elif not existing_content.strip():
-                            debug_print(debug, "OVERWRITE EMPTY", message="File exists but is empty. Overwriting.")
-                        else:
-                            error_to_report = {"code": "FILE_EXISTS", "message": "Target file exists and is not empty."}
-
-                    if not error_to_report:
-                        working_content = (content_to_add or "").replace('\r\n', internal_newline).replace('\r', internal_newline)
-                        if not silent:
-                            print(f"  + SUCCESS: Mod #{mod_idx + 1} (CREATE) applied.")
+                if action == 'RECREATE':
+                    if working_content == (content_to_add or ""):
+                        report_idempotency_skip("RECREATE content already matches.")
                         continue
-
-                if error_to_report:
-                    report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error_to_report}
+                    working_content = content_to_add or ""
+                    last_mod_end_pos = len(working_content)
+                    made_progress = True
+                    if not silent:
+                        pass_str = f" (Pass {pass_number})" if pass_number > 1 else ""
+                        print(f"  + SUCCESS: Mod #{mod_idx + 1} (RECREATE) applied{pass_str}.")
+                    continue
+                if not action:
+                    error = {"code": "INVALID_MODIFICATION", "message": "'action' is required.", "context": {}}
+                    report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
                     if not strict:
-                        if not silent:
-                            print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action')}). Reason: {error_to_report.get('message')}")
-                        if create_failure_case:
-                            create_failure_case_file(f"afailed.{mod_idx}.log", report, original_content)
-                        failed_file_block = next((item for item in failed_changes_output if item.get('file_path') == relative_path), None)
-                        if not failed_file_block:
-                            failed_file_block = {'file_path': relative_path, 'modifications': []}
-                            if change.get('newline'): failed_file_block['newline'] = change.get('newline')
-                            failed_changes_output.append(failed_file_block)
-                        failed_file_block['modifications'].append(mod)
+                        failed_in_this_pass.append((mod_idx, mod, report, error, original_content))
                         continue
                     else:
                         if create_failure_case:
                             create_failure_case_file("afailed.log", report, original_content)
                         return report_error(report)
 
-            # Heuristic: If snippet_tail is identical to content, the AI likely confused "what to replace" with "what to replace it with".
-            # Treat this as a point-based replacement.
-            if snippet_val and snippet_tail and content_to_add:
-                norm_end = "\n".join(l.strip() for l in snippet_tail.strip().splitlines())
-                norm_content = "\n".join(l.strip() for l in content_to_add.strip().splitlines())
-                if norm_end == norm_content:
-                    debug_print(debug, "HEURISTIC APPLIED", message="snippet_tail matches content. Treating as single snippet.")
+                # Clean inputs from the patch to avoid issues with trailing whitespace in the patch file itself.
+                snippet_val = clean_lines(mod.get('snippet'))
+                snippet_tail = clean_lines(mod.get('snippet_tail'))
+                anchor_val = clean_lines(mod.get('anchor'))
+
+                if not strict and not snippet_val and anchor_val and action in ['REPLACE', 'DELETE', 'INSERT_AFTER', 'INSERT_BEFORE']:
+                    snippet_val = anchor_val
+                    anchor_val = None
+                    if not silent:
+                        print(f"  [TOLERANT] Mod #{mod_idx + 1}: Missing 'snippet'. Using 'anchor' as snippet.")
+
+                # === SAFE CREATE (File or Directory) ===
+                if action == 'CREATE':
+                    error_to_report = None
+                    # Case 1: Create a directory
+                    if content_to_add is None or (content_to_add == "" and is_explicit_dir):
+                        # Idempotency check: if it's already a dir, we're done.
+                        if os.path.isdir(file_path):
+                            report_idempotency_skip("Directory already exists.")
+                            pending_mods = []
+                            break
+                        # If it's a file, it's an error.
+                        if os.path.exists(file_path):
+                            error_to_report = {"code": "PATH_IS_FILE", "message": "Cannot create directory, a file exists at the path."}
+
+                        if not error_to_report:
+                            # This is a directory creation, so it's a terminal action for this file block.
+                            write_plan.append(('CREATE_DIR', file_path, None, relative_path))
+                            terminal_op_planned = True
+                            working_content = "" # No further processing
+                            made_progress = True
+                            if not silent:
+                                pass_str = f" (Pass {pass_number})" if pass_number > 1 else ""
+                                print(f"  + SUCCESS: Mod #{mod_idx + 1} (CREATE) applied{pass_str}.")
+                            pending_mods = []
+                            break
+
+                    # Case 2: Create a file (content is not None)
+                    else:
+                        if os.path.isfile(file_path):
+                            with open(file_path, 'r', encoding='utf-8', newline=None) as f_check:
+                                existing_content = f_check.read().replace('\r\n', internal_newline).replace('\r', internal_newline)
+
+                            normalized_existing = "\n".join(l.strip() for l in existing_content.strip().splitlines())
+                            normalized_new = "\n".join(l.strip() for l in (content_to_add or "").strip().splitlines())
+
+                            if normalized_existing == normalized_new:
+                                report_idempotency_skip("File exists with matching content.")
+                                pending_mods = []
+                                break
+                            elif not existing_content.strip():
+                                debug_print(debug, "OVERWRITE EMPTY", message="File exists but is empty. Overwriting.")
+                            else:
+                                error_to_report = {"code": "FILE_EXISTS", "message": "Target file exists and is not empty."}
+
+                        if not error_to_report:
+                            working_content = (content_to_add or "").replace('\r\n', internal_newline).replace('\r', internal_newline)
+                            made_progress = True
+                            if not silent:
+                                pass_str = f" (Pass {pass_number})" if pass_number > 1 else ""
+                                print(f"  + SUCCESS: Mod #{mod_idx + 1} (CREATE) applied{pass_str}.")
+                            continue
+
+                    if error_to_report:
+                        report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error_to_report}
+                        if not strict:
+                            failed_in_this_pass.append((mod_idx, mod, report, error_to_report, original_content))
+                            continue
+                        else:
+                            if create_failure_case:
+                                create_failure_case_file("afailed.log", report, original_content)
+                            return report_error(report)
+
+                # Heuristic: If snippet_tail is identical to content, the AI likely confused "what to replace" with "what to replace it with".
+                # Treat this as a point-based replacement.
+                if snippet_val and snippet_tail and content_to_add:
+                    norm_end = "\n".join(l.strip() for l in snippet_tail.strip().splitlines())
+                    norm_content = "\n".join(l.strip() for l in content_to_add.strip().splitlines())
+                    if norm_end == norm_content:
+                        debug_print(debug, "HEURISTIC APPLIED", message="snippet_tail matches content. Treating as single snippet.")
+                        snippet_tail = None
+
+                # Heuristic: If snippet and snippet_tail are identical, treat as a single-snippet operation.
+                if snippet_val and snippet_tail and snippet_val.strip() == snippet_tail.strip():
+                    debug_print(debug, "HEURISTIC APPLIED", message="snippet is identical to snippet_tail. Treating as single snippet.")
+                    snippet_tail = None
+                # Heuristic: Auto-correct AI error where snippet_tail is part of snippet (now snippet_val).
+                if snippet_val and snippet_tail and snippet_val.strip().endswith(snippet_tail.strip()):
+                    debug_print(debug, "HEURISTIC APPLIED", message="snippet_tail is suffix of snippet. Treating as single snippet.")
                     snippet_tail = None
 
-            # Heuristic: If snippet and snippet_tail are identical, treat as a single-snippet operation.
-            if snippet_val and snippet_tail and snippet_val.strip() == snippet_tail.strip():
-                debug_print(debug, "HEURISTIC APPLIED", message="snippet is identical to snippet_tail. Treating as single snippet.")
-                snippet_tail = None
-            # Heuristic: Auto-correct AI error where snippet_tail is part of snippet (now snippet_val).
-            if snippet_val and snippet_tail and snippet_val.strip().endswith(snippet_tail.strip()):
-                debug_print(debug, "HEURISTIC APPLIED", message="snippet_tail is suffix of snippet. Treating as single snippet.")
-                snippet_tail = None
+                target_pos, error = None, {}
 
-            target_pos, error = None, {}
+                # Logic: If snippet_tail exists, it is a range operation starting at snippet_val.
+                # If only snippet_val exists, it is a point operation.
 
-            # Logic: If snippet_tail exists, it is a range operation starting at snippet_val.
-            # If only snippet_val exists, it is a point operation.
-
-            if snippet_tail is not None:
-                if snippet_val is None:
-                    error = {"code": "INVALID_MODIFICATION", "message": "Range requires 'snippet'.", "context": {}}
-                elif action not in ['REPLACE', 'DELETE']:
-                    error = {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range.", "context": {}}
-                else:
-                    if snippet_val and snippet_val.strip() == '^':
-                        start_range_begin, start_range_end = 0, 0
-                        error = None
+                if snippet_tail is not None:
+                    if snippet_val is None:
+                        error = {"code": "INVALID_MODIFICATION", "message": "Range requires 'snippet'.", "context": {}}
+                    elif action not in ['REPLACE', 'DELETE']:
+                        error = {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range.", "context": {}}
                     else:
-                        start_pos_info, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos)
-                        if not error: start_range_begin, start_range_end = start_pos_info
-
-                    if not error:
-                        if snippet_tail and snippet_tail.strip() == '$':
-                            target_pos = (start_range_begin, len(working_content))
+                        if snippet_val and snippet_val.strip() == '^':
+                            start_range_begin, start_range_end = 0, 0
+                            error = None
                         else:
-                            end_occurrences = smart_find(working_content[start_range_end:], snippet_tail)
-                            if not end_occurrences:
-                                error = {"code": "snippet_tail_NOT_FOUND", "message": "End snippet not found.", "context": {"snippet": snippet_val, "snippet_tail": snippet_tail}}
+                            start_pos_info, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos)
+                            if not error: start_range_begin, start_range_end = start_pos_info
+
+                        if not error:
+                            if snippet_tail and snippet_tail.strip() == '$':
+                                target_pos = (start_range_begin, len(working_content))
                             else:
-                                end_range_begin_rel, end_range_end_rel = end_occurrences[0]
-                                target_pos = (start_range_begin, start_range_end + end_range_end_rel)
+                                end_occurrences = smart_find(working_content[start_range_end:], snippet_tail)
+                                if not end_occurrences:
+                                    error = {"code": "snippet_tail_NOT_FOUND", "message": "End snippet not found.", "context": {"snippet": snippet_val, "snippet_tail": snippet_tail}}
+                                else:
+                                    end_range_begin_rel, end_range_end_rel = end_occurrences[0]
+                                    target_pos = (start_range_begin, start_range_end + end_range_end_rel)
 
-            elif snippet_val is not None:
-                 target_pos, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos)
+                elif snippet_val is not None:
+                     target_pos, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos)
 
-            elif action != 'CREATE':
-                error = {"code": "INVALID_MODIFICATION", "message": "Modification requires locators.", "context": {}}
+                elif action != 'CREATE':
+                    error = {"code": "INVALID_MODIFICATION", "message": "Modification requires locators.", "context": {}}
 
-            if error:
-                is_idempotency_skip = False
-                if action == 'DELETE' and error.get('code') in ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND']:
-                    report_idempotency_skip("Snippet to delete is already gone."); is_idempotency_skip = True
-                if action == 'REPLACE' and error.get('code') in ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND', 'snippet_tail_NOT_FOUND']:
-                    content_pos, _ = find_target_in_content(working_content, anchor_val, content_to_add or "", debug=False)
-                    if content_pos: report_idempotency_skip("Snippet not found, but replacement content exists."); is_idempotency_skip = True
+                if error:
+                    is_idempotency_skip = False
+                    if action == 'DELETE' and error.get('code') in ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND']:
+                        report_idempotency_skip("Snippet to delete is already gone."); is_idempotency_skip = True
+                    if action == 'REPLACE' and error.get('code') in ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND', 'snippet_tail_NOT_FOUND']:
+                        content_pos, _ = find_target_in_content(working_content, anchor_val, content_to_add or "", debug=False)
+                        if content_pos: report_idempotency_skip("Snippet not found, but replacement content exists."); is_idempotency_skip = True
 
-                if is_idempotency_skip: continue
+                    if is_idempotency_skip: continue
 
-                report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
-                if 'context' not in report['error']: report['error']['context'] = {}
-                report['error']['context']['action'] = action
-                if not strict:
-                    if not silent:
-                        print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action') or 'Unknown'}). Reason: {error.get('message')}")
-                    if create_failure_case:
-                        create_failure_case_file(f"afailed.{mod_idx}.log", report, original_content)
+                    report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
+                    if 'context' not in report['error']: report['error']['context'] = {}
+                    report['error']['context']['action'] = action
 
-                    # Track failed mods to save them to afailed.ap later
-                    failed_file_block = next((item for item in failed_changes_output if item.get('file_path') == relative_path), None)
-                    if not failed_file_block:
-                        failed_file_block = {'file_path': relative_path, 'modifications': []}
-                        if change.get('newline'): failed_file_block['newline'] = change.get('newline')
-                        failed_changes_output.append(failed_file_block)
+                    if not strict:
+                        failed_in_this_pass.append((mod_idx, mod, report, error, original_content))
+                        continue
+                    else:
+                        if create_failure_case:
+                            create_failure_case_file("afailed.log", report, original_content)
+                        return report_error(report)
 
-                    failed_file_block['modifications'].append(mod)
-                    # We cannot safely advance the cursor after a failure, so it remains unchanged
+                if action == 'CREATE': continue
+                start_pos, end_pos = target_pos
+
+                for key, val in [('include_leading_blank_lines', -1), ('include_trailing_blank_lines', 1)]:
+                    count = mod.get(key, 0)
+                    if count > 0:
+                        pos, direction = (start_pos, -1) if val == -1 else (end_pos, 1)
+                        for _ in range(count):
+                            next_newline = working_content.rfind(internal_newline, 0, pos -1) if direction == -1 else working_content.find(internal_newline, pos)
+                            if next_newline == -1:
+                                if (working_content[:pos] if direction == -1 else working_content[pos:]).strip() == "": pos = 0 if direction == -1 else len(working_content)
+                                break
+                            line_content = working_content[next_newline + 1:pos] if direction == -1 else working_content[pos:next_newline]
+                            if line_content.strip() == "": pos = next_newline + 1 if direction == -1 else next_newline + 1
+                            else: break
+                        if val == -1: start_pos = pos
+                        else: end_pos = pos
+
+                def normalize_block(text): return "\n".join(l.strip() for l in (text or "").strip().splitlines())
+
+                if action == 'REPLACE' and normalize_block(working_content[start_pos:end_pos]) == normalize_block(content_to_add):
+                    report_idempotency_skip("REPLACE content already present.")
+                    last_mod_end_pos = end_pos
                     continue
-                else:
-                    if create_failure_case:
-                        create_failure_case_file("afailed.log", report, original_content)
-                    return report_error(report)
+                elif action == 'INSERT_AFTER' and normalize_block(working_content[end_pos:]).startswith(normalize_block(content_to_add)):
+                    report_idempotency_skip("INSERT_AFTER content already present.")
+                    last_mod_end_pos = end_pos + len(content_to_add or "")
+                    continue
+                elif action == 'INSERT_BEFORE' and normalize_block(working_content[:start_pos]).endswith(normalize_block(content_to_add)):
+                    report_idempotency_skip("INSERT_BEFORE content already present.")
+                    last_mod_end_pos = start_pos
+                    continue
 
-            if action == 'CREATE': continue
-            start_pos, end_pos = target_pos
+                if action == 'DELETE':
+                    working_content = working_content[:start_pos] + working_content[end_pos:]
 
-            for key, val in [('include_leading_blank_lines', -1), ('include_trailing_blank_lines', 1)]:
-                count = mod.get(key, 0)
-                if count > 0:
-                    pos, direction = (start_pos, -1) if val == -1 else (end_pos, 1)
-                    for _ in range(count):
-                        next_newline = working_content.rfind(internal_newline, 0, pos -1) if direction == -1 else working_content.find(internal_newline, pos)
-                        if next_newline == -1:
-                            if (working_content[:pos] if direction == -1 else working_content[pos:]).strip() == "": pos = 0 if direction == -1 else len(working_content)
-                            break
-                        line_content = working_content[next_newline + 1:pos] if direction == -1 else working_content[pos:next_newline]
-                        if line_content.strip() == "": pos = next_newline + 1 if direction == -1 else next_newline + 1
+                indented_content = content_to_add or ""
+                if action in ['REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE'] and content_to_add:
+                    line_start_pos = working_content.rfind(internal_newline, 0, start_pos) + 1
+                    indentation = ""
+                    for char in working_content[line_start_pos:start_pos]:
+                        if char in ' \t': indentation += char
                         else: break
-                    if val == -1: start_pos = pos
-                    else: end_pos = pos
 
-            def normalize_block(text): return "\n".join(l.strip() for l in (text or "").strip().splitlines())
+                    debug_print(debug, "INDENTATION LOGIC", detected_indent=indentation)
+                    if not content_to_add:
+                        indented_content = ""
+                    else:
+                        lines = content_to_add.split(internal_newline)
+                        indented_content = internal_newline.join([indentation + line for line in lines])
+                    original_had_trailing_newline = end_pos > start_pos and working_content[end_pos-1] == internal_newline
+                    if action in ['INSERT_AFTER', 'INSERT_BEFORE'] or (action == 'REPLACE' and original_had_trailing_newline):
+                        if not content_to_add.endswith('\n'):
+                            indented_content += internal_newline
 
-            if action == 'REPLACE' and normalize_block(working_content[start_pos:end_pos]) == normalize_block(content_to_add):
-                report_idempotency_skip("REPLACE content already present.")
-                last_mod_end_pos = end_pos
-                continue
-            elif action == 'INSERT_AFTER' and normalize_block(working_content[end_pos:]).startswith(normalize_block(content_to_add)):
-                report_idempotency_skip("INSERT_AFTER content already present.")
-                last_mod_end_pos = end_pos + len(content_to_add or "")
-                continue
-            elif action == 'INSERT_BEFORE' and normalize_block(working_content[:start_pos]).endswith(normalize_block(content_to_add)):
-                report_idempotency_skip("INSERT_BEFORE content already present.")
-                last_mod_end_pos = start_pos
-                continue
+                if action == 'REPLACE':
+                    working_content = working_content[:start_pos] + indented_content + working_content[end_pos:]
+                elif action == 'INSERT_AFTER':
+                    working_content = working_content[:end_pos] + indented_content + working_content[end_pos:]
+                elif action == 'INSERT_BEFORE':
+                    working_content = working_content[:start_pos] + indented_content + working_content[start_pos:]
 
-            if action == 'DELETE':
-                working_content = working_content[:start_pos] + working_content[end_pos:]
+                # Update cursor position for the next iteration based on the change that just happened.
+                if action == 'REPLACE':
+                    last_mod_end_pos = start_pos + len(indented_content)
+                elif action == 'INSERT_AFTER':
+                    last_mod_end_pos = end_pos + len(indented_content)
+                elif action == 'INSERT_BEFORE':
+                    last_mod_end_pos = start_pos + len(indented_content)
+                elif action == 'DELETE':
+                    last_mod_end_pos = start_pos
 
-            indented_content = content_to_add or ""
-            if action in ['REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE'] and content_to_add:
-                line_start_pos = working_content.rfind(internal_newline, 0, start_pos) + 1
-                indentation = ""
-                for char in working_content[line_start_pos:start_pos]:
-                    if char in ' \t': indentation += char
-                    else: break
+                made_progress = True
+                if not silent:
+                    pass_str = f" (Pass {pass_number})" if pass_number > 1 else ""
+                    print(f"  + SUCCESS: Mod #{mod_idx + 1} ({action}) applied{pass_str}.")
 
-                debug_print(debug, "INDENTATION LOGIC", detected_indent=indentation)
-                if not content_to_add:
-                    indented_content = ""
-                else:
-                    lines = content_to_add.split(internal_newline)
-                    indented_content = internal_newline.join([indentation + line for line in lines])
-                original_had_trailing_newline = end_pos > start_pos and working_content[end_pos-1] == internal_newline
-                if action in ['INSERT_AFTER', 'INSERT_BEFORE'] or (action == 'REPLACE' and original_had_trailing_newline):
-                    if not content_to_add.endswith('\n'):
-                        indented_content += internal_newline
+            if not made_progress:
+                final_failed_mods = failed_in_this_pass
+                break
 
-            if action == 'REPLACE':
-                working_content = working_content[:start_pos] + indented_content + working_content[end_pos:]
-            elif action == 'INSERT_AFTER':
-                working_content = working_content[:end_pos] + indented_content + working_content[end_pos:]
-            elif action == 'INSERT_BEFORE':
-                working_content = working_content[:start_pos] + indented_content + working_content[start_pos:]
-            # Update cursor position for the next iteration based on the change that just happened.
-            if action == 'REPLACE':
-                last_mod_end_pos = start_pos + len(indented_content)
-            elif action == 'INSERT_AFTER':
-                last_mod_end_pos = end_pos + len(indented_content)
-            elif action == 'INSERT_BEFORE':
-                last_mod_end_pos = start_pos + len(indented_content)
-            elif action == 'DELETE':
-                last_mod_end_pos = start_pos
+            pending_mods = [(idx, m) for idx, m, r, e, c in failed_in_this_pass]
+            pass_number += 1
+
+        for mod_idx, mod, report, err_dict, orig_content in final_failed_mods:
             if not silent:
-                print(f"  + SUCCESS: Mod #{mod_idx + 1} ({action}) applied.")
+                print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action') or 'Unknown'}). Reason: {err_dict.get('message')}")
+            if create_failure_case:
+                create_failure_case_file(f"afailed.{mod_idx}.log", report, orig_content)
+
+            failed_file_block = next((item for item in failed_changes_output if item.get('file_path') == relative_path), None)
+            if not failed_file_block:
+                failed_file_block = {'file_path': relative_path, 'modifications': []}
+                if change.get('newline'): failed_file_block['newline'] = change.get('newline')
+                failed_changes_output.append(failed_file_block)
+
+            failed_file_block['modifications'].append(mod)
 
         if not terminal_op_planned:
             final_content = newline_char.join([line for line in working_content.split(internal_newline)])
