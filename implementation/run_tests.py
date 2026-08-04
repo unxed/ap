@@ -16,7 +16,7 @@ TESTS = [
     ("13_create_file", "positive", None),
     ("14_edge_cases", "positive", None),
     ("15_robustness", "positive", None),
-    ("16_empty_actions", "positive", None),
+    ("16_empty_actions", "negative", "EMPTY_REPLACE"),
     ("17_error_file_not_found", "negative", "FILE_NOT_FOUND"),
     ("18_idempotency", "positive", None),
     ("19_idempotency_noop", "positive", None),

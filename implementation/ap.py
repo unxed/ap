@@ -191,6 +191,15 @@ def parse_ap3_format(patch_file: str, strict: bool = False) -> PatchData:
                     current_modification = {'action': 'CREATE'}
                     current_file_change['modifications'].append(current_modification)
                     reading_key = 'content'
+                elif args and args not in {'LF', 'CRLF', 'CR'}:
+                    # Path provided as argument: CREATE path/to/file
+                    current_file_change = {'modifications': []}
+                    data['changes'].append(current_file_change)
+                    current_file_change['file_path'] = args
+
+                    current_modification = {'action': 'CREATE'}
+                    current_file_change['modifications'].append(current_modification)
+                    reading_key = 'content'
                 else:
                     # Hybrid: acts as key-value (for path) AND action.
                     reading_key = 'CREATE_PATH'
@@ -741,6 +750,28 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 debug_print(debug, f"MODIFICATION #{mod_idx+1} (Pass {pass_number})", action=action)
 
                 content_to_add = clean_lines(mod.get('content'))
+
+                if action in ['REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'RECREATE']:
+                    if 'content' not in mod:
+                        error = {"code": "MISSING_CONTENT", "message": f"Action '{action}' requires 'content' directive.", "context": {}}
+                        report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
+                        if not strict:
+                            failed_in_this_pass.append((mod_idx, mod, report, error, original_content))
+                            continue
+                        else:
+                            if create_failure_case:
+                                create_failure_case_file("afailed.log", report, original_content)
+                            return report_error(report)
+                    elif action == 'REPLACE' and not content_to_add:
+                        error = {"code": "EMPTY_REPLACE", "message": "REPLACE with empty content is not allowed. Use DELETE instead.", "context": {}}
+                        report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
+                        if not strict:
+                            failed_in_this_pass.append((mod_idx, mod, report, error, original_content))
+                            continue
+                        else:
+                            if create_failure_case:
+                                create_failure_case_file("afailed.log", report, original_content)
+                            return report_error(report)
 
                 if action == 'RECREATE':
                     if working_content == (content_to_add or ""):
