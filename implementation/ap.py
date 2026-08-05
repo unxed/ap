@@ -550,7 +550,59 @@ def smart_find(content: str, snippet: str) -> List[Tuple[int, int]]:
                 occurrences.append((start_pos, end_pos))
     return occurrences
 
-def find_target_in_content(content: str, anchor: Optional[str], snippet: str, debug: bool = False, last_match_end: int = 0) -> Tuple[Optional[Tuple[int, int]], Dict[str, Any]]:
+def reindent_content(content: str, start_pos: int, end_pos: int, new_content: str,
+                     action: str, strict: bool, warn) -> str:
+    """
+    Restores the indentation a model dropped from a `content` block.
+
+    Locators are matched whitespace-insensitively, which regularly convinces a
+    model that indentation is irrelevant for `content` too. It is not: `content`
+    is inserted verbatim. When the target region is indented and *every* line of
+    `content` sits at column 0, the intent is unambiguous, and silently writing
+    flattened code would break any indentation-sensitive language.
+    """
+    if strict:
+        return new_content
+    region_lines = [l for l in content[start_pos:end_pos].split('\n') if l.strip()]
+    if not region_lines:
+        return new_content
+    reference = region_lines[-1] if action == 'INSERT_AFTER' else region_lines[0]
+    base_indent = leading_whitespace(reference)
+    if not base_indent:
+        return new_content
+    new_lines = new_content.split('\n')
+    non_blank = [l for l in new_lines if l.strip()]
+    if not non_blank or min(len(leading_whitespace(l)) for l in non_blank) > 0:
+        return new_content
+    warn(f"'content' starts at column 0 while the target is indented by {len(base_indent)}. "
+         f"Re-indenting the inserted block to match.")
+    return '\n'.join(base_indent + l if l.strip() else l for l in new_lines)
+
+def find_partial_line_matches(content: str, snippet: Optional[str], limit: int = 3) -> List[Dict[str, Any]]:
+    """
+    Detects the single most common locator mistake: a snippet that is only a
+    *fragment* of a line. Reporting it explicitly turns a mystifying
+    'Snippet not found' into an actionable message.
+    """
+    snippet_lines = [l.strip() for l in (snippet or "").strip().splitlines() if l.strip()]
+    if len(snippet_lines) != 1:
+        return []
+    needle = snippet_lines[0]
+    if len(needle) < 4:
+        return []
+    hits = []
+    for idx, line in enumerate(content.splitlines()):
+        stripped = line.strip()
+        if stripped != needle and needle in stripped:
+            hits.append({"line_number": idx + 1, "text": line})
+            if len(hits) >= limit:
+                break
+    return hits
+
+def line_number_at(content: str, offset: int) -> int:
+    return content.count('\n', 0, offset) + 1
+
+def find_target_in_content(content: str, anchor: Optional[str], snippet: str, debug: bool = False, last_match_end: int = 0, allow_repeat: bool = False) -> Tuple[Optional[Tuple[int, int]], Dict[str, Any]]:
     if not anchor:
         if snippet and snippet.strip() == '^':
             return (0, 0), {}
@@ -641,15 +693,27 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
     debug_print(debug, "SNIPPET SEARCH", snippet=snippet, search_space_len=len(search_space))
     occurrences = smart_find(search_space, snippet)
 
-    # === SNIPPET CURSOR FILTER (STRICT) ===
-    # Always filter by cursor, not just on ambiguity, to enforce sequential patching.
-    if occurrences: # Only filter if there's anything to filter
+    # === SNIPPET CURSOR FILTER ===
+    # Matches before the cursor belong to already-processed regions, so they are
+    # never candidates. This is what makes sequential top-to-bottom patching work.
+    if occurrences:
         forward_occurrences = [o for o in occurrences if (o[0] + offset) >= last_match_end]
         if forward_occurrences:
-            # Of the valid forward matches, take the first one.
+            # An anchor-less snippet that still matches several places is
+            # genuinely ambiguous: picking the first one silently patches a
+            # random occurrence. `allow_repeat` is set only when the patch
+            # itself repeats this locator, which is the documented way to
+            # address N identical blocks in order.
+            if len(forward_occurrences) > 1 and not anchor and not allow_repeat:
+                positions = [line_number_at(content, o[0] + offset) for o in forward_occurrences]
+                return None, {
+                    "code": "AMBIGUOUS_MATCH",
+                    "message": (f"Snippet matches {len(forward_occurrences)} places "
+                                f"(lines {', '.join(str(p) for p in positions[:10])}). "
+                                f"Add an 'anchor' to disambiguate, or extend the snippet."),
+                    "context": {"snippet": snippet, "count": len(forward_occurrences), "match_lines": positions},
+                }
             occurrences = [forward_occurrences[0]]
-            if len(forward_occurrences) > 1:
-                debug_print(debug, "SNIPPET AMBIGUITY RESOLVED (CURSOR)", position=occurrences[0][0])
         else:
             # All occurrences were behind the cursor. Treat as not found.
             occurrences = []
@@ -663,14 +727,183 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
             "fuzzy_matches": get_fuzzy_matches(search_space, snippet),
             "search_space_preview": "\n".join(preview_lines[:7])
         }
+        partial = find_partial_line_matches(search_space, snippet)
+        if partial:
+            context["partial_line_matches"] = partial
+            context["hint"] = ("The snippet appears as a fragment of an existing line. "
+                               "`ap` locators MUST cover whole lines: extend the snippet "
+                               "to the full line, from its first non-blank character to its last.")
         return None, {"code": "SNIPPET_NOT_FOUND", "message": "Snippet not found.", "context": context}
-
-    if len(occurrences) > 1 and not anchor:
-        return None, {"code": "AMBIGUOUS_MATCH", "message": f"Snippet found {len(occurrences)} times.", "context": {"snippet": snippet, "count": len(occurrences)}}
 
     start_pos, end_pos = occurrences[0]
     return (start_pos + offset, end_pos + offset), {}
 
+# --- LLM-oriented failure report ------------------------------------------
+# When a patch does not apply cleanly the next step is almost always "hand the
+# failure back to the model that produced it". `afailed.ap` is the machine
+# replay of the failed modifications; `afailed.md` is the briefing that lets a
+# model fix them in one round trip instead of guessing.
+
+FIX_HINTS = {
+    "AMBIGUOUS_MATCH":
+        "The `snippet` matches several places, so the patcher refuses to guess. Either extend the "
+        "`snippet` downwards until it covers a unique block, or add an `anchor` holding the nearest "
+        "unique construct above the target (a function signature, a class line, a unique comment). "
+        "If you really meant to change every occurrence, emit one modification per occurrence, all "
+        "with the same locator, in top-to-bottom order.",
+    "SNIPPET_NOT_FOUND":
+        "The `snippet` does not exist in the search scope. Copy the locator verbatim from the "
+        "'Current content' section below - do not retype it from memory. Remember that a locator "
+        "MUST cover whole lines and that the search starts after the previous modification of the "
+        "same file (top-to-bottom order is mandatory).",
+    "ANCHOR_NOT_FOUND":
+        "The `anchor` does not exist in the file. Copy it verbatim from the 'Current content' "
+        "section, or drop the `anchor` entirely if the `snippet` is already unique.",
+    "AMBIGUOUS_ANCHOR":
+        "The `anchor` occurs several times and the `snippet` could not be tied to exactly one of "
+        "them. Choose a larger or more distinctive anchor.",
+    "snippet_tail_NOT_FOUND":
+        "`snippet_tail` was not found after `snippet`. The two MUST be independent: `snippet_tail` "
+        "marks the *end* of the block and must appear strictly after `snippet` in the file. Do not "
+        "put the whole block into `snippet`, and do not repeat `content` in `snippet_tail`.",
+    "EMPTY_REPLACE":
+        "`REPLACE` with empty `content` is refused because it is indistinguishable from a truncated "
+        "answer. Use `DELETE` to remove code.",
+    "MISSING_CONTENT":
+        "The action requires a `content` block and none was given. Check that the answer was not cut "
+        "off and that the `content` directive carries the patch ID prefix.",
+    "INVALID_MODIFICATION":
+        "The modification is structurally incomplete. Every REPLACE/DELETE/INSERT_* needs a `snippet`; "
+        "every REPLACE/INSERT_*/RECREATE needs a `content`.",
+    "FILE_NOT_FOUND":
+        "The target file does not exist. Check the path (it is relative to the project root) or use "
+        "`CREATE` if the file is meant to be new.",
+    "FILE_EXISTS":
+        "`CREATE` refuses to overwrite a non-empty file. Use `RECREATE` to replace its whole content, "
+        "or ordinary REPLACE/INSERT modifications to edit it in place.",
+    "PATH_IS_FILE":
+        "A file already exists where a directory was requested.",
+    "DESTINATION_EXISTS":
+        "The `RENAME` destination already exists. Delete it first or pick another name.",
+    "INVALID_FILE_PATH":
+        "The path escapes the project root or is malformed. Paths are relative to the project root "
+        "and MUST NOT contain `..`.",
+    "INVALID_PATCH_FILE":
+        "The patch itself could not be parsed. Re-read the directive syntax: every directive line is "
+        "`<patch-id> KEYWORD`, the ID is the same 8 hex characters everywhere, and no `#` comments "
+        "may appear inside the patch body.",
+    "AFAILED_EXISTS":
+        "A previous failure report is still present. Remove it before applying a new patch.",
+}
+
+
+def _fence(text: str, lang: str = "") -> str:
+    body = text if text.endswith('\n') else text + '\n'
+    fence = "```"
+    while fence in body:
+        fence += "`"
+    return f"{fence}{lang}\n{body}{fence}\n"
+
+
+def _numbered(text: str, limit: int = 400) -> str:
+    lines = text.split('\n')
+    truncated = len(lines) > limit
+    shown = lines[:limit]
+    width = len(str(len(shown)))
+    body = '\n'.join(f"{str(i + 1).rjust(width)} | {l}" for i, l in enumerate(shown))
+    if truncated:
+        body += f"\n... ({len(lines) - limit} more lines omitted)"
+    return body
+
+
+def write_llm_report(path: str, patch_content: str, file_reports: List[Dict[str, Any]],
+                     fatal: Optional[Dict[str, Any]] = None, strict: bool = False) -> None:
+    """Writes `afailed.md`: everything a model needs to repair the patch in one step."""
+    out: List[str] = []
+    total = sum(len(fr['failed']) for fr in file_reports) + (1 if fatal else 0)
+    out.append(f"# ap patch report: {total} problem(s)\n")
+    out.append(
+        "This file was written by the `ap` patcher for the model that generated the patch.\n"
+        "**Read it, then emit a NEW `ap` patch containing only the fixes below.**\n"
+        "Do not resend modifications that already applied - the files on disk already contain them,\n"
+        "and the 'Current content' sections below show their state *after* the partial application.\n")
+
+    if fatal:
+        err = fatal.get('error', {})
+        out.append("## Fatal error\n")
+        out.append(f"- **Code:** `{err.get('code')}`")
+        if fatal.get('file_path'):
+            out.append(f"- **File:** `{fatal['file_path']}`")
+        out.append(f"- **Message:** {err.get('message')}\n")
+        hint = FIX_HINTS.get(err.get('code'))
+        if hint:
+            out.append(f"**How to fix:** {hint}\n")
+        if strict:
+            out.append("The patcher ran in strict mode, so **nothing was written to disk**: "
+                       "the whole patch must be resent, corrected.\n")
+
+    for fr in file_reports:
+        ok = fr['total_mods'] - len(fr['failed'])
+        out.append(f"## File `{fr['file_path']}`\n")
+        out.append(f"{ok} of {fr['total_mods']} modification(s) applied or skipped as already present; "
+                   f"{len(fr['failed'])} failed.\n")
+
+        for item in fr['failed']:
+            mod = item['mod']
+            err = item['error']
+            line = mod.get('_line')
+            where = f" (patch line {line})" if line else ""
+            out.append(f"### Modification #{item['mod_idx'] + 1} - `{mod.get('action') or 'UNKNOWN'}`{where}\n")
+            out.append(f"- **Code:** `{err.get('code')}`")
+            out.append(f"- **Message:** {err.get('message')}\n")
+            hint = FIX_HINTS.get(err.get('code'))
+            if hint:
+                out.append(f"**How to fix:** {hint}\n")
+
+            ctx = err.get('context') or {}
+            if ctx.get('match_lines'):
+                out.append("Matched at lines: " + ", ".join(str(x) for x in ctx['match_lines']) + "\n")
+            if ctx.get('hint'):
+                out.append(f"{ctx['hint']}\n")
+            if ctx.get('partial_line_matches'):
+                out.append("Lines that *contain* the snippet as a fragment:\n")
+                out.append(_fence('\n'.join(
+                    f"{m['line_number']} | {m['text']}" for m in ctx['partial_line_matches'])))
+            if ctx.get('fuzzy_matches'):
+                out.append("Closest existing text (did you mean one of these?):\n")
+                for m in ctx['fuzzy_matches']:
+                    out.append(f"- line {m['line_number']}, similarity {m['score']}:")
+                    out.append(_fence(m['text']))
+
+            out.append("What the failed modification asked for:\n")
+            sent = []
+            for key in ('anchor', 'snippet', 'snippet_tail', 'content'):
+                if key in mod:
+                    sent.append(f"[{key}]\n{mod[key]}")
+            out.append(_fence('\n\n'.join(sent) if sent else '(no locators)'))
+
+        if fr['original'] != fr['current']:
+            diff = difflib.unified_diff(
+                fr['original'].splitlines(keepends=True), fr['current'].splitlines(keepends=True),
+                fromfile=f"a/{fr['file_path']}", tofile=f"b/{fr['file_path']}")
+            out.append("### What the patcher already changed in this file\n")
+            out.append(_fence(''.join(diff), 'diff'))
+        else:
+            out.append("### This file was not modified at all\n")
+
+        out.append("### Current content of the file, as it is on disk right now\n")
+        out.append("Use these exact lines when building new locators.\n")
+        out.append(_fence(_numbered(fr['current'])))
+
+    if patch_content:
+        out.append("## The patch that failed\n")
+        out.append(_fence(patch_content))
+
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(out))
+    except IOError:
+        pass
 def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_report: bool = False, debug: bool = False, strict: bool = False, failure_report_path: str = None, create_failure_case: bool = False, silent: bool = False) -> Dict[str, Any]:
     patch_content = ""
     try:
@@ -711,6 +944,11 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 print(f"ERROR: Could not write failure case report to {filename}: {e}")
 
     def report_error(details):
+        try:
+            write_llm_report(os.path.join(project_dir, "afailed.md"), patch_content,
+                             llm_file_reports, fatal=details, strict=strict)
+        except Exception:
+            pass
         if failure_report_path:
             try:
                 with open(failure_report_path, 'w', encoding='utf-8') as f:
@@ -768,6 +1006,8 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
     failed_changes_output = []
     write_plan = []
+    llm_file_reports: List[Dict[str, Any]] = []
+    afailed_md_path = os.path.join(project_dir, "afailed.md")
 
     for change in data.get('changes', []):
         if 'file_path' not in change:
@@ -920,6 +1160,22 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
         internal_newline = '\n'
         working_content = original_content.replace('\r\n', internal_newline).replace('\r', internal_newline)
+        # A locator repeated across several modifications of the same file is
+        # the documented way to address N identical blocks in order. Any other
+        # multi-match is real ambiguity and must not be resolved by guessing.
+        def locator_key(m: Modification):
+            return (normalize_block(m.get('anchor')), normalize_block(m.get('snippet')),
+                    normalize_block(m.get('snippet_tail')))
+        repeated_locators = set()
+        seen_locators = set()
+        for m in change.get('modifications', []):
+            if not (m.get('snippet') or m.get('anchor')):
+                continue
+            k = locator_key(m)
+            if k in seen_locators:
+                repeated_locators.add(k)
+            seen_locators.add(k)
+
         pending_mods = list(enumerate(change.get('modifications', [])))
         final_failed_mods = []
         pass_number = 1
@@ -1075,17 +1331,24 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 # Logic: If snippet_tail exists, it is a range operation starting at snippet_val.
                 # If only snippet_val exists, it is a point operation.
 
+                allow_repeat = locator_key(mod) in repeated_locators
+
                 if snippet_tail is not None:
                     if snippet_val is None:
                         error = {"code": "INVALID_MODIFICATION", "message": "Range requires 'snippet'.", "context": {}}
-                    elif action not in ['REPLACE', 'DELETE']:
+                    elif action not in ['REPLACE', 'DELETE', 'INSERT_AFTER', 'INSERT_BEFORE']:
                         error = {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' does not support range.", "context": {}}
+                    elif action in ['INSERT_AFTER', 'INSERT_BEFORE'] and strict:
+                        error = {"code": "INVALID_MODIFICATION", "message": f"Action '{action}' is a point operation and MUST NOT carry 'snippet_tail'.", "context": {}}
                     else:
+                        if action in ['INSERT_AFTER', 'INSERT_BEFORE'] and not silent:
+                            print(f"  [TOLERANT] Mod #{mod_idx + 1}: '{action}' is a point action; "
+                                  f"inserting at the {'end' if action == 'INSERT_AFTER' else 'start'} of the given range.")
                         if snippet_val and snippet_val.strip() == '^':
                             start_range_begin, start_range_end = 0, 0
                             error = None
                         else:
-                            start_pos_info, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos)
+                            start_pos_info, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos, allow_repeat)
                             if not error: start_range_begin, start_range_end = start_pos_info
 
                         if not error:
@@ -1093,14 +1356,22 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                                 target_pos = (start_range_begin, len(working_content))
                             else:
                                 end_occurrences = smart_find(working_content[start_range_end:], snippet_tail)
-                                if not end_occurrences:
-                                    error = {"code": "snippet_tail_NOT_FOUND", "message": "End snippet not found.", "context": {"snippet": snippet_val, "snippet_tail": snippet_tail}}
-                                else:
+                                if end_occurrences:
                                     end_range_begin_rel, end_range_end_rel = end_occurrences[0]
                                     target_pos = (start_range_begin, start_range_end + end_range_end_rel)
+                                else:
+                                    # Reversed range: the model swapped start and end.
+                                    before = smart_find(working_content[:start_range_begin], snippet_tail) if not strict else []
+                                    if before:
+                                        if not silent:
+                                            print(f"  [TOLERANT] Mod #{mod_idx + 1}: 'snippet_tail' occurs BEFORE 'snippet'. "
+                                                  f"Treating the pair as a reversed range.")
+                                        target_pos = (before[-1][0], start_range_end)
+                                    else:
+                                        error = {"code": "snippet_tail_NOT_FOUND", "message": "End snippet not found.", "context": {"snippet": snippet_val, "snippet_tail": snippet_tail}}
 
                 elif snippet_val is not None:
-                     target_pos, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos)
+                     target_pos, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos, allow_repeat)
 
                 elif action != 'CREATE':
                     error = {"code": "INVALID_MODIFICATION", "message": "Modification requires locators.", "context": {}}
@@ -1145,8 +1416,6 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         if val == -1: start_pos = pos
                         else: end_pos = pos
 
-                def normalize_block(text): return "\n".join(l.strip() for l in (text or "").strip().splitlines())
-
                 if action == 'REPLACE' and normalize_block(working_content[start_pos:end_pos]) == normalize_block(content_to_add):
                     report_idempotency_skip("REPLACE content already present.")
                     last_mod_end_pos = end_pos
@@ -1165,21 +1434,14 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
                 indented_content = content_to_add or ""
                 if action in ['REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE'] and content_to_add:
-                    line_start_pos = working_content.rfind(internal_newline, 0, start_pos) + 1
-                    indentation = ""
-                    for char in working_content[line_start_pos:start_pos]:
-                        if char in ' \t': indentation += char
-                        else: break
-
-                    debug_print(debug, "INDENTATION LOGIC", detected_indent=indentation)
-                    if not content_to_add:
-                        indented_content = ""
-                    else:
-                        lines = content_to_add.split(internal_newline)
-                        indented_content = internal_newline.join([indentation + line for line in lines])
+                    def indent_warn(message, _idx=mod_idx):
+                        if not silent: print(f"  [TOLERANT] Mod #{_idx + 1}: {message}")
+                    indented_content = reindent_content(
+                        working_content, start_pos, end_pos, content_to_add, action, strict, indent_warn)
+                    debug_print(debug, "INDENTATION LOGIC", reindented=indented_content != content_to_add)
                     original_had_trailing_newline = end_pos > start_pos and working_content[end_pos-1] == internal_newline
                     if action in ['INSERT_AFTER', 'INSERT_BEFORE'] or (action == 'REPLACE' and original_had_trailing_newline):
-                        if not content_to_add.endswith('\n'):
+                        if not indented_content.endswith('\n'):
                             indented_content += internal_newline
 
                 if action == 'REPLACE':
@@ -1211,6 +1473,15 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             pending_mods = [(idx, m) for idx, m, r, e, c in failed_in_this_pass]
             pass_number += 1
 
+        if final_failed_mods:
+            llm_file_reports.append({
+                "file_path": relative_path,
+                "original": original_content.replace('\r\n', internal_newline).replace('\r', internal_newline),
+                "current": working_content,
+                "total_mods": len(change.get('modifications', [])),
+                "failed": [{"mod_idx": mi, "mod": m, "error": e} for mi, m, r, e, c in final_failed_mods],
+            })
+
         for mod_idx, mod, report, err_dict, orig_content in final_failed_mods:
             if not silent:
                 print(f"  - FAILED: Mod #{mod_idx + 1} ({mod.get('action') or 'Unknown'}). Reason: {err_dict.get('message')}")
@@ -1228,13 +1499,13 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         if not terminal_op_planned:
             final_content = newline_char.join([line for line in working_content.split(internal_newline)])
             if final_content != original_content or not file_existed:
-                write_plan.append(('WRITE', file_path, final_content, relative_path))
+                write_plan.append(('WRITE', file_path, final_content, relative_path, original_content))
 
     if not strict and failed_changes_output:
         afailed_path = os.path.join(project_dir, "afailed.ap")
         with open(afailed_path, "w", encoding="utf-8") as f:
             f.write(f"# Summary: Failed changes from a tolerant patch application.\n\n")
-            f.write(f"{patch_id_str} AP 3.1\n\n")
+            f.write(f"{patch_id_str} AP {AP_FORMAT_VERSION}\n\n")
             for change_item in failed_changes_output:
                 f.write(f"{patch_id_str} FILE")
                 if change_item.get("newline"): f.write(f" {change_item['newline']}")
@@ -1246,7 +1517,10 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     for key in ['include_leading_blank_lines', 'include_trailing_blank_lines']:
                         if key in mod_item: f.write(f"{patch_id_str} {key} {mod_item[key]}\n")
                     f.write("\n")
-        if not silent: print(f"\nWARNING: Some changes failed and were written to {afailed_path}")
+        write_llm_report(afailed_md_path, patch_content, llm_file_reports)
+        if not silent:
+            print(f"\nWARNING: Some changes failed and were written to {afailed_path}")
+            print(f"         A briefing for the generating model is in {afailed_md_path}")
 
     if not dry_run:
         # Separate operations into phases to avoid conflicts (e.g., delete before create)
@@ -1292,7 +1566,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 return report_error(err_details)
 
         # Phase 4: File Writes
-        for _, f_path, f_content, r_path in write_ops:
+        for _, f_path, f_content, r_path, _prev in write_ops:
             try:
                 debug_print(debug, "WRITING FILE", path=f_path, content_len=len(f_content))
                 os.makedirs(os.path.dirname(f_path) or '.', exist_ok=True)
@@ -1307,10 +1581,32 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
     elif write_plan:
         debug_print(debug, "DRY RUN: SKIPPING WRITE", num_files=len(write_plan))
+        if not silent and not json_report:
+            print("\n--- DRY RUN: planned changes ---")
+            for op in write_plan:
+                kind, path_a, payload, r_path = op[0], op[1], op[2], op[3]
+                if kind == 'WRITE':
+                    before = (op[4] if len(op) > 4 else "") or ""
+                    diff = difflib.unified_diff(
+                        before.splitlines(keepends=True),
+                        (payload or "").splitlines(keepends=True),
+                        fromfile=f"a/{r_path}", tofile=f"b/{r_path}")
+                    body = "".join(diff)
+                    print(body if body else f"(no textual change) {r_path}")
+                elif kind == 'RENAME':
+                    print(f"rename {r_path} -> {os.path.relpath(payload or path_a, project_dir)}")
+                else:
+                    print(f"{kind.lower().replace('_', ' ')} {r_path}")
     else:
         debug_print(debug, "NO CHANGES: SKIPPING WRITE")
         pass
 
+    if not failed_changes_output and not dry_run and os.path.exists(afailed_md_path):
+        try: os.remove(afailed_md_path)
+        except OSError: pass
+
+    if failed_changes_output:
+        return {"status": "PARTIAL", "failed_files": [c.get('file_path') for c in failed_changes_output]}
     return {"status": "SUCCESS"}
 
 if __name__ == '__main__':
@@ -1323,13 +1619,20 @@ if __name__ == '__main__':
     parser.add_argument("--failure-report", help="Path to save a detailed JSON report on failure (includes context).")
     parser.add_argument("--create-failure-case", action="store_true", help="On failure, create afailed.log (or afailed.<mod_idx>.log in tolerant mode) with full context for debugging.")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging.")
+    parser.add_argument("--no-final-newline", action="store_true", help="Do not append a trailing newline to rewritten files.")
     parser.add_argument("-v", "--version", action="version", version=f"ap patcher {AP_FORMAT_VERSION}")
 
     args = parser.parse_args()
-    result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug, args.strict, args.failure_report, args.create_failure_case)
+    result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug,
+                         args.strict, args.failure_report, args.create_failure_case,
+                         ensure_final_newline=not args.no_final_newline)
 
     if args.json_report and result['status'] != 'SUCCESS':
         print(json.dumps(result, indent=2))
 
+    # 0 = everything applied, 2 = tolerant run with skipped modifications
+    # (see afailed.ap), 1 = nothing was applied.
+    if result["status"] == "PARTIAL":
+        exit(2)
     if result["status"] != "SUCCESS":
         exit(1)

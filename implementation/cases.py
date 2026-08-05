@@ -108,4 +108,104 @@ CASES = [
         "expect_error": "INVALID_PATCH_FILE",
         "expect_unchanged": ["a.txt"],
     },
+    {
+        "name": "c01_ambiguous_snippet_refuses_to_guess",
+        "files": {"a.py": "def f():\n    a = 1\n    return a\n\ndef g():\n    a = 1\n    return a\n"},
+        "patch": "aa000001 AP 3.2\n\naa000001 FILE\na.py\n\naa000001 REPLACE\naa000001 snippet\n    a = 1\naa000001 content\n    a = 42\n",
+        "expect_status": "PARTIAL",
+        "expect_unchanged": ["a.py"],
+        "expect_md": ["AMBIGUOUS_MATCH", "anchor", "Current content of the file"],
+    },
+    {
+        "name": "c02_anchor_resolves_the_ambiguity",
+        "files": {"a.py": "def f():\n    a = 1\n    return a\n\ndef g():\n    a = 1\n    return a\n"},
+        "patch": "aa000002 AP 3.2\n\naa000002 FILE\na.py\n\naa000002 REPLACE\naa000002 anchor\ndef g():\naa000002 snippet\n    a = 1\naa000002 content\n    a = 42\n",
+        "expect_files": {"a.py": "def f():\n    a = 1\n    return a\n\ndef g():\n    a = 42\n    return a\n"},
+    },
+    {
+        "name": "c03_repeated_locator_is_sequential_not_ambiguous",
+        "files": {"a.txt": "x\nx\nx\n"},
+        "patch": ("aa000003 AP 3.2\n\naa000003 FILE\na.txt\n\n"
+                  "aa000003 REPLACE\naa000003 snippet\nx\naa000003 content\none\n\n"
+                  "aa000003 REPLACE\naa000003 snippet\nx\naa000003 content\ntwo\n"),
+        "expect_files": {"a.txt": "one\ntwo\nx\n"},
+    },
+
+    # ------------------------------------------------------------ chat noise
+    {
+        "name": "c14_dropped_indentation_is_restored",
+        "files": {"a.py": "def f():\n    if x:\n        do_a()\n        do_b()\n"},
+        "patch": "aa000014 AP 3.2\n\naa000014 FILE\na.py\n\naa000014 INSERT_AFTER\naa000014 snippet\ndo_a()\naa000014 content\ndo_c()\n",
+        "expect_files": {"a.py": "def f():\n    if x:\n        do_a()\n        do_c()\n        do_b()\n"},
+    },
+    {
+        "name": "c15_explicit_indentation_is_never_touched",
+        "files": {"a.py": "def f():\n    if x:\n        do_a()\n        do_b()\n"},
+        "patch": "aa000015 AP 3.2\n\naa000015 FILE\na.py\n\naa000015 INSERT_AFTER\naa000015 snippet\ndo_a()\naa000015 content\n        do_c()\n",
+        "expect_files": {"a.py": "def f():\n    if x:\n        do_a()\n        do_c()\n        do_b()\n"},
+    },
+    {
+        "name": "c16_partial_line_snippet_gets_an_actionable_message",
+        "files": {"a.py": "def f():\n    x = compute(1, 2) + 1\n"},
+        "patch": "aa000016 AP 3.2\n\naa000016 FILE\na.py\n\naa000016 REPLACE\naa000016 snippet\ncompute(1, 2)\naa000016 content\n    x = compute(3, 4) + 1\n",
+        "expect_status": "PARTIAL",
+        "expect_unchanged": ["a.py"],
+        "expect_md": ["fragment of an existing line", "SNIPPET_NOT_FOUND"],
+    },
+    {
+        "name": "c17_reversed_range_is_auto_corrected",
+        "files": {"a.txt": "keep\nstart\nmiddle\nend\nkeep2\n"},
+        "patch": ("aa000017 AP 3.2\n\naa000017 FILE\na.txt\n\naa000017 REPLACE\n"
+                  "aa000017 snippet\nend\naa000017 snippet_tail\nstart\naa000017 content\nNEW\n"),
+        "expect_files": {"a.txt": "keep\nNEW\nkeep2\n"},
+    },
+    {
+        "name": "c18_point_action_with_a_range_inserts_at_the_range_edge",
+        "files": {"a.txt": "start\nmiddle\nend\ntail\n"},
+        "patch": ("aa000018 AP 3.2\n\naa000018 FILE\na.txt\n\naa000018 INSERT_AFTER\n"
+                  "aa000018 snippet\nstart\naa000018 snippet_tail\nend\naa000018 content\nNEW\n"),
+        "expect_files": {"a.txt": "start\nmiddle\nend\nNEW\ntail\n"},
+    },
+
+    # ----------------------------------------------------------- output shape
+    {
+        "name": "c20_untouched_files_are_not_rewritten",
+        "files": {"a.txt": "one\ntwo"},
+        "patch": "aa000020 AP 3.2\n\naa000020 FILE\na.txt\n\naa000020 REPLACE\naa000020 snippet\nnope\naa000020 content\nNOPE\n",
+        "expect_status": "PARTIAL",
+        "expect_unchanged": ["a.txt"],
+    },
+
+    # ------------------------------------------------------------ strict mode
+    {
+        "name": "c23_strict_is_atomic_across_files",
+        "files": {"a.txt": "one\n", "b.txt": "two\n"},
+        "strict": True,
+        "patch": ("aa000023 AP 3.2\n\naa000023 FILE\na.txt\n\naa000023 REPLACE\n"
+                  "aa000023 snippet\none\naa000023 content\nONE\n\n"
+                  "aa000023 FILE\nb.txt\n\naa000023 REPLACE\naa000023 snippet\nmissing\n"
+                  "aa000023 content\nX\n"),
+        "expect_status": "FAILED",
+        "expect_error": "SNIPPET_NOT_FOUND",
+        "expect_unchanged": ["a.txt", "b.txt"],
+    },
+
+    # ------------------------------------------------------------ the report
+    {
+        "name": "c24_report_shows_what_was_already_applied",
+        "files": {"a.txt": "one\ntwo\n"},
+        "patch": ("aa000024 AP 3.2\n\naa000024 FILE\na.txt\n\n"
+                  "aa000024 REPLACE\naa000024 snippet\none\naa000024 content\nONE\n\n"
+                  "aa000024 REPLACE\naa000024 snippet\nmissing line\naa000024 content\nX\n"),
+        "expect_status": "PARTIAL",
+        "expect_files": {"a.txt": "ONE\ntwo\n"},
+        "expect_md": ["already changed in this file", "-one", "+ONE", "The patch that failed"],
+    },
+    {
+        "name": "c25_clean_rerun_removes_the_stale_report",
+        "files": {"a.txt": "one\n", "afailed.md": "# stale report\n"},
+        "patch": "aa000025 AP 3.2\n\naa000025 FILE\na.txt\n\naa000025 REPLACE\naa000025 snippet\none\naa000025 content\nONE\n",
+        "expect_files": {"a.txt": "ONE\n"},
+        "expect_missing": ["afailed.md"],
+    },
 ]
