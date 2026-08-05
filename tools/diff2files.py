@@ -71,8 +71,8 @@ def copy_changed_files(diff_file, output_folder="_out"):
 if __name__ == "__main__":
     # Check if the filename argument is provided
     if len(sys.argv) < 2:
-        print("Usage: python extract_diff.py <path_to_diff_file>")
-        print("Example: python extract_diff.py changes.diff")
+        print("Usage: python diff2files.py <path_to_diff_file>")
+        print("Example: python diff2files.py changes.diff")
         sys.exit(1)
 
     # Get the filename from the first command line argument
