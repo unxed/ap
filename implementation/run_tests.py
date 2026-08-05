@@ -2,6 +2,7 @@
 import os, sys, shutil, tempfile, difflib, json, argparse, hashlib, io
 from os.path import isdir, isfile, join
 from ap import apply_patch
+from cases import CASES
 
 TESTS = [
     ("01_basic_replace", "positive", None), ("02_sequences", "positive", None),
@@ -340,6 +341,73 @@ def run_negative_test(test_name, expected_code, debug=False):
     finally:
         shutil.rmtree(test_dir)
 
+def run_case(case, debug=False):
+    """Runs one declarative case from cases.py."""
+    name = case["name"]
+    test_dir = tempfile.mkdtemp()
+    try:
+        for rel, content in case.get("files", {}).items():
+            path = join(test_dir, rel)
+            os.makedirs(os.path.dirname(path) or test_dir, exist_ok=True)
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(content)
+
+        patch_path = join(test_dir, "_case.ap")
+        with open(patch_path, "w", encoding="utf-8") as f:
+            f.write(case["patch"])
+
+        report = apply_patch(patch_file=patch_path, project_dir=test_dir,
+                             strict=case.get("strict", False), debug=debug, silent=not debug)
+
+        def fail(reason):
+            print(f"❌ FAILED: {name}. {reason}")
+            return False
+
+        expected_status = case.get("expect_status", "SUCCESS")
+        if report.get("status") != expected_status:
+            return fail(f"Expected status {expected_status}, got {report.get('status')}: {report.get('error')}")
+
+        if case.get("expect_error"):
+            actual = report.get("error", {}).get("code")
+            if actual != case["expect_error"]:
+                return fail(f"Expected error {case['expect_error']}, got {actual}.")
+
+        for rel, expected in case.get("expect_files", {}).items():
+            path = join(test_dir, rel)
+            if not isfile(path):
+                return fail(f"Expected file '{rel}' does not exist.")
+            with open(path, encoding="utf-8", newline="") as f:
+                actual = f.read()
+            if actual != expected:
+                diff = difflib.unified_diff(expected.splitlines(keepends=True),
+                                            actual.splitlines(keepends=True),
+                                            fromfile="expected", tofile="actual")
+                return fail(f"Content of '{rel}' differs.\n--- DIFF ---\n" + "".join(diff))
+
+        for rel in case.get("expect_unchanged", []):
+            with open(join(test_dir, rel), encoding="utf-8", newline="") as f:
+                actual = f.read()
+            if actual != case["files"][rel]:
+                return fail(f"File '{rel}' was modified but should not have been.")
+
+        for rel in case.get("expect_missing", []):
+            if os.path.exists(join(test_dir, rel)):
+                return fail(f"File '{rel}' should not exist.")
+
+        if case.get("expect_md"):
+            md_path = join(test_dir, "afailed.md")
+            if not isfile(md_path):
+                return fail("afailed.md was not created.")
+            with open(md_path, encoding="utf-8") as f:
+                md = f.read()
+            for needle in case["expect_md"]:
+                if needle not in md:
+                    return fail(f"afailed.md does not mention {needle!r}.")
+
+        print(f"✅ PASSED: {name}")
+        return True
+    finally:
+        shutil.rmtree(test_dir)
 def main():
     parser = argparse.ArgumentParser(description="Run the full test suite for the 'ap' patcher.")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging for each test.")
@@ -356,6 +424,12 @@ def main():
                 results.append(run_negative_test(name, code, debug=args.debug))
         except Exception as e:
             print(f"❌ CRITICAL FAILURE in test '{name}': {e}"); results.append(False)
+    print("\n--- Declarative cases (cases.py) ---")
+    for case in CASES:
+        try:
+            results.append(run_case(case, debug=args.debug))
+        except Exception as e:
+            print(f"❌ CRITICAL FAILURE in case '{case['name']}': {e}"); results.append(False)
 
     passed, total = sum(results), len(results)
     print(f"\n===========================\n  Summary: {passed} / {total} tests passed.\n===========================")

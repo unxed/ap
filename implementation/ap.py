@@ -30,12 +30,19 @@ class FileChange(TypedDict, total=False):
 
 class PatchData(TypedDict):
     version: str
+    patch_id: Optional[str]
     changes: List[FileChange]
 
 def clean_lines(s: Optional[str]) -> Optional[str]:
     """Removes trailing whitespace from each line of the input string."""
     if s is None: return None
     return '\n'.join(line.rstrip(' \t') for line in s.splitlines())
+def normalize_block(text: Optional[str]) -> str:
+    """Normalizes a block of text the same way the search algorithm does."""
+    return "\n".join(l.strip() for l in (text or "").strip().splitlines() if l.strip())
+
+def leading_whitespace(line: str) -> str:
+    return line[:len(line) - len(line.lstrip(' \t'))]
 
 def visualize_str(s: str) -> str:
     """Makes special characters visible for debugging."""
@@ -54,217 +61,400 @@ def debug_print(debug_flag: bool, title: str, **kwargs):
             print(f"  {key}: {visualize_str(value)}")
     print("--------------------" + "-" * len(title))
 
-def parse_ap3_format(patch_file: str, strict: bool = False) -> PatchData:
-    """Parses the AP 3.1 delimiter-based format into the standard internal dict structure."""
-    KEYWORDS = {
-        'FILE', 'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE', 'CREATE', 'RECREATE',
-        'snippet', 'anchor', 'content', 'snippet_tail', 'RENAME', 'LF', 'CRLF', 'CR',
-        'include_leading_blank_lines', 'include_trailing_blank_lines', 'END'
-    }
+def visualize_str(s: str) -> str:
+    """Makes special characters visible for debugging."""
+    if not isinstance(s, str): return repr(s)
+    return s.replace('\t', '\\t').replace('\r', '\\r').replace('\n', '\\n\n')
+
+def debug_print(debug_flag: bool, title: str, **kwargs):
+    """Prints a formatted debug message if the debug flag is set."""
+    if not debug_flag: return
+    print(f"\n--- DEBUG: {title} ---")
+    for key, value in kwargs.items():
+        if isinstance(value, str) and len(value) > 80:
+            print(f"  {key} (len={len(value)}):")
+            print(f"    Visualized: {visualize_str(value[:200])}... (truncated)")
+        else:
+            print(f"  {key}: {visualize_str(value)}")
+    print("--------------------" + "-" * len(title))
+
+AP_FORMAT_VERSION = "3.2"
+AP_SUPPORTED_VERSIONS = ("3.0", "3.1", "3.2")
+
+# Canonical directive keywords of the format.
+ACTION_KEYS = {'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE', 'RECREATE'}
+VALUE_KEYS = {'snippet', 'anchor', 'content', 'snippet_tail'}
+ARG_KEYS = {'include_leading_blank_lines', 'include_trailing_blank_lines'}
+NEWLINE_VALS = {'LF', 'CRLF', 'CR'}
+CANONICAL_KEYS = ACTION_KEYS | VALUE_KEYS | ARG_KEYS | {'FILE', 'CREATE', 'RENAME', 'END'}
+
+# Tolerated misspellings/synonyms that weaker models invent. Resolving them is
+# safe because directive lines are always prefixed with the patch ID, so they
+# can never collide with the payload.
+KEY_ALIASES = {
+    'CREATE_FILE': 'CREATE', 'CREATE_DIR': 'CREATE', 'NEW_FILE': 'CREATE', 'ADD_FILE': 'CREATE',
+    'MOVE': 'RENAME', 'RENAME_TO': 'RENAME', 'MOVE_TO': 'RENAME',
+    'INSERT': 'INSERT_AFTER', 'APPEND_AFTER': 'INSERT_AFTER', 'ADD_AFTER': 'INSERT_AFTER',
+    'PREPEND_BEFORE': 'INSERT_BEFORE', 'ADD_BEFORE': 'INSERT_BEFORE',
+    'REWRITE': 'RECREATE', 'OVERWRITE': 'RECREATE', 'REPLACE_FILE': 'RECREATE',
+    'REMOVE': 'DELETE',
+    'snippet_start': 'snippet', 'start_snippet': 'snippet',
+    'snippet_end': 'snippet_tail', 'end_snippet': 'snippet_tail', 'tail': 'snippet_tail',
+    'new_content': 'content', 'code': 'content', 'body': 'content',
+    'scope': 'anchor',
+}
+
+FENCE_RE = re.compile(r'^\s*(?:`{3,}|~{3,})\s*[\w+.#-]*\s*$')
+HEADER_RE = re.compile(r'^(\S+)\s+AP\s+v?(\d+(?:\.\d+)?)\s*$', re.IGNORECASE)
+
+
+def strip_markdown_fences(lines: List[str]) -> List[str]:
+    """
+    Removes the markdown code fences that wrapped the patch in a chat answer.
+
+    Without this, the closing ``` is silently appended to the last `content`
+    block and ends up inside the patched source file.
+    """
+    first = next((i for i, l in enumerate(lines) if l.strip()), None)
+    if first is None or not FENCE_RE.match(lines[first]):
+        return lines
+    out = list(lines)
+    out[first] = ''
+    for j in range(len(out) - 1, first, -1):
+        if not out[j].strip():
+            continue
+        if FENCE_RE.match(out[j]):
+            out[j] = ''
+        break
+    return out
+
+
+def resolve_directive_key(raw_key: str, strict: bool, warn) -> Optional[str]:
+    """Maps a directive keyword to its canonical form, forgiving case/colon/synonym drift."""
+    if raw_key in CANONICAL_KEYS:
+        return raw_key
+    if strict:
+        return None
+
+    key = raw_key.rstrip(':').strip()
+    if key in CANONICAL_KEYS:
+        warn(f"Directive '{raw_key}' normalized to '{key}'.")
+        return key
+    if key in KEY_ALIASES:
+        warn(f"Non-standard directive '{raw_key}' interpreted as '{KEY_ALIASES[key]}'.")
+        return KEY_ALIASES[key]
+
+    low = key.lower()
+    for cand in CANONICAL_KEYS:
+        if cand.lower() == low:
+            warn(f"Directive '{raw_key}' has wrong case, interpreted as '{cand}'.")
+            return cand
+    for alias, cand in KEY_ALIASES.items():
+        if alias.lower() == low:
+            warn(f"Non-standard directive '{raw_key}' interpreted as '{cand}'.")
+            return cand
+    return None
+
+
+def is_id_like(candidate: str, reference: str) -> bool:
+    """
+    Decides whether a token may be a drifted patch ID.
+
+    Deliberately conservative: the drift check runs on every line, including
+    lines inside a `content` block, so a loose rule would let payload text
+    hijack the directive prefix.
+    """
+    if re.fullmatch(r'[0-9a-fA-F]{8}', candidate):
+        return True
+    return len(candidate) == len(reference) and re.fullmatch(r'[0-9A-Za-z_]+', candidate) is not None
+
+
+def parse_ap3_format(patch_file: str, strict: bool = False, silent: bool = False) -> PatchData:
+    """Parses the AP delimiter-based format into the standard internal dict structure."""
+
+    def warn(message: str):
+        if not silent:
+            print(f"  [TOLERANT] {message}")
 
     with open(patch_file, 'r', encoding='utf-8') as f:
-        lines = f.read().splitlines()
+        raw = f.read()
+    if raw.startswith('\ufeff'):
+        raw = raw[1:]
+    lines = strip_markdown_fences(raw.splitlines())
 
     patch_id = None
-    data: PatchData = {'version': '3.1', 'changes': []}
+    known_ids: List[str] = []
+    data: PatchData = {'version': AP_FORMAT_VERSION, 'patch_id': None, 'changes': []}
     current_file_change = None
     current_modification = None
     reading_key = None
-    value_lines = []
-    pending_args = None # To store args for delayed processing (e.g. CREATE)
-
-    header_pattern = re.compile(r'^(\S+)\s+AP\s+3\.1$')
+    value_lines: List[str] = []
+    pending_args = None  # To store args for delayed processing (e.g. CREATE)
     directive_pattern = None
-
     start_idx = 0
 
-    # Find header and patch_id
+    def rebuild_directive_pattern():
+        alternatives = "|".join(re.escape(i) for i in known_ids)
+        return re.compile(rf'^(?:{alternatives})\s+(.*)$')
+
+    def adopt_id(new_id: str):
+        nonlocal directive_pattern
+        if new_id not in known_ids:
+            known_ids.append(new_id)
+        directive_pattern = rebuild_directive_pattern()
+
+    # --- Header discovery -------------------------------------------------
     for i, line in enumerate(lines):
         stripped_line = line.strip()
         if not stripped_line:
             continue
 
-        match = header_pattern.match(stripped_line)
+        match = HEADER_RE.match(stripped_line)
         if match:
-            patch_id = match.group(1)
+            patch_id, version = match.group(1), match.group(2)
             if not re.match(r'^[0-9a-fA-F]{8}$', patch_id):
                 if strict:
                     raise ValueError(f"Invalid patch ID '{patch_id}' on line {i+1}. ID MUST be exactly 8 hexadecimal characters.")
-                print(f"  [TOLERANT] Tolerating invalid non-hex or semantic patch ID: '{patch_id}'.")
-
-            directive_pattern = re.compile(rf'^{re.escape(patch_id)}\s+(.*)$')
+                warn(f"Tolerating invalid non-hex or semantic patch ID: '{patch_id}'.")
+            if version not in AP_SUPPORTED_VERSIONS:
+                if strict:
+                    raise ValueError(f"Unsupported AP version '{version}' on line {i+1}. This patcher implements {AP_FORMAT_VERSION}.")
+                warn(f"Patch declares AP {version}; parsing it as AP {AP_FORMAT_VERSION}.")
+            data['version'] = version
+            adopt_id(patch_id)
             start_idx = i + 1
             break
 
-        # В толерантном режиме мы проверяем, не пропустила ли LLM заголовок вовсе
+        # Tolerant mode: the model may have dropped the header entirely.
         if not strict:
-            potential_match = re.match(r'^([0-9a-fA-F]{8})\s+(FILE|REPLACE|INSERT_AFTER|INSERT_BEFORE|DELETE|CREATE|RENAME)$', stripped_line)
+            potential_match = re.match(
+                r'^([0-9a-fA-F]{8})\s+(FILE|REPLACE|INSERT_AFTER|INSERT_BEFORE|DELETE|CREATE|RECREATE|RENAME)\b',
+                stripped_line)
             if potential_match:
                 patch_id = potential_match.group(1)
-                directive_pattern = re.compile(rf'^{re.escape(patch_id)}\s+(.*)$')
-                print(f"  [TOLERANT] Missing AP header. Auto-detected patch ID: '{patch_id}' from line {i+1}")
+                adopt_id(patch_id)
+                warn(f"Missing AP header. Auto-detected patch ID: '{patch_id}' from line {i+1}")
                 start_idx = i
                 break
 
     if not patch_id:
-        raise ValueError("Valid AP 3.1 header not found in the file.")
+        raise ValueError(f"Valid AP {AP_FORMAT_VERSION} header not found in the file.")
+    data['patch_id'] = patch_id
 
     paramless = r'(RECREATE|REPLACE|INSERT_AFTER|INSERT_BEFORE|DELETE|CREATE|snippet|anchor|content|snippet_tail|RENAME|END)'
-    file_dir = r'(FILE(?:\s+(?:LF|CRLF|CR))?)'
+    file_dir = r'(FILE(?:\s+\S.*)?)'
     include_dir = r'((?:include_leading_blank_lines|include_trailing_blank_lines)\s+\d+)'
     drift_pattern = re.compile(rf'^(\S+)\s+({paramless}|{file_dir}|{include_dir})$')
 
-    # Main parsing loop
+    def flush_value():
+        """Commits the collected value block to the directive that opened it."""
+        nonlocal current_file_change, current_modification, reading_key, value_lines, pending_args
+        if not reading_key:
+            return
+        start = 0
+        while start < len(value_lines) and not value_lines[start].strip():
+            start += 1
+        end = len(value_lines)
+        while end > start and not value_lines[end - 1].strip():
+            end -= 1
+        value = "\n".join(value_lines[start:end])
+
+        if reading_key == 'CREATE_CONTENT':
+            # Speculative: `CREATE` after `FILE` may be followed either by the
+            # file body or by an explicit `content` directive. Only a non-empty
+            # block is the body.
+            if value and current_modification is not None:
+                current_modification['content'] = value
+        elif reading_key == "path" and current_file_change is not None:
+            current_file_change['file_path'] = value
+        elif reading_key == "CREATE_PATH":
+            # Implicit file creation support
+            if value:
+                current_file_change = {'modifications': []}
+                data['changes'].append(current_file_change)
+                current_file_change['file_path'] = value
+                if pending_args in NEWLINE_VALS:
+                    current_file_change['newline'] = pending_args
+            if not current_file_change:
+                raise ValueError("Action 'CREATE' used before any FILE directive.")
+            current_modification = {'action': 'CREATE'}
+            current_file_change['modifications'].append(current_modification)
+        elif reading_key == 'RENAME' and current_file_change is not None and not current_modification:
+            current_file_change['rename_to'] = value
+        elif current_modification is not None:
+            current_modification[reading_key] = value
+        elif reading_key == 'RENAME' and current_file_change is not None:
+            current_file_change['rename_to'] = value
+
+        reading_key, value_lines, pending_args = None, [], None
+
+    # --- Main parsing loop ------------------------------------------------
     for i in range(start_idx, len(lines)):
         line = lines[i]
         line_num = i + 1
         stripped_line = line.strip()
 
-        # Check for ID drift/hallucination strictly on valid directive signatures
+        # Adopt (rather than replace) drifted IDs: a model that alternates
+        # between two IDs still produces a fully parseable patch.
         id_drift_match = drift_pattern.match(stripped_line)
         if id_drift_match:
             new_id = id_drift_match.group(1)
             keyword_part = id_drift_match.group(2).split()[0]
-            if new_id != patch_id and keyword_part in KEYWORDS:
-                if not strict:
-                    print(f"  [TOLERANT] ID drift detected on line {line_num}: '{patch_id}' -> '{new_id}'. Adopting new ID.")
-                    patch_id = new_id
-                    directive_pattern = re.compile(rf'^{re.escape(patch_id)}\s+(.*)$')
-                else:
+            if new_id not in known_ids and keyword_part in CANONICAL_KEYS and is_id_like(new_id, patch_id):
+                if strict:
                     raise ValueError(f"Patch ID mismatch on line {line_num}: expected '{patch_id}', found '{new_id}'. Run without --strict to allow ID correction.")
+                warn(f"ID drift detected on line {line_num}: '{patch_id}' -> '{new_id}'. Accepting both.")
+                adopt_id(new_id)
 
         match = directive_pattern.match(line)
         if match:
-            if reading_key:
-                start = 0
-                while start < len(value_lines) and not value_lines[start].strip(): start += 1
-                end = len(value_lines)
-                while end > start and not value_lines[end - 1].strip(): end -= 1
-                value = "\n".join(value_lines[start:end])
-
-                if reading_key == "path" and current_file_change:
-                    current_file_change['file_path'] = value
-                elif reading_key == "CREATE_PATH":
-                    # Implicit file creation support
-                    if value:
-                        current_file_change = {'modifications': []}
-                        data['changes'].append(current_file_change)
-                        current_file_change['file_path'] = value
-                        if pending_args in {'LF', 'CRLF', 'CR'}: current_file_change['newline'] = pending_args
-
-                    if not current_file_change: raise ValueError(f"Action 'CREATE' on line {line_num} (prev) before FILE.")
-                    current_modification = {'action': 'CREATE'}
-                    current_file_change['modifications'].append(current_modification)
-                elif current_modification:
-                    current_modification[reading_key] = value
-                elif reading_key == 'RENAME' and current_file_change:
-                    current_file_change['rename_to'] = value
-
-                reading_key, value_lines, pending_args = None, [], None
+            flush_value()
 
             parts = match.group(1).strip().split(maxsplit=1)
-            key, args = parts[0], parts[1] if len(parts) > 1 else None
-            if key == 'CREATE_FILE': key = 'CREATE'
-
-            ACTIONS = {'RECREATE', 'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE'}
-            VALUE_KEYS = {'snippet', 'anchor', 'content', 'snippet_tail'}
-            ARG_KEYS = {'include_leading_blank_lines', 'include_trailing_blank_lines'}
-            FILE_STARTERS = {'CREATE'} # Treated as hybrid Action/Value
-            NEWLINE_VALS = {'LF', 'CRLF', 'CR'}
+            if not parts:
+                continue
+            raw_key, args = parts[0], parts[1] if len(parts) > 1 else None
+            key = resolve_directive_key(raw_key, strict, warn)
+            if key is None:
+                raise ValueError(f"Unknown directive '{raw_key}' on line {line_num}.")
 
             if key == 'END':
-                if args: raise ValueError(f"Directive '{key}' on line {line_num} takes no arguments.")
+                if args:
+                    raise ValueError(f"Directive '{key}' on line {line_num} takes no arguments.")
                 break
+
             elif key == 'FILE':
                 current_file_change = {'modifications': []}
                 data['changes'].append(current_file_change)
-                if args and args in NEWLINE_VALS: current_file_change['newline'] = args
-                current_modification, reading_key = None, 'path'
-            elif key in ACTIONS:
-                if not current_file_change: raise ValueError(f"Action '{key}' on line {line_num} before FILE.")
-                current_modification = {'action': key}
+                inline_path = None
+                if args:
+                    tokens = args.split(maxsplit=1)
+                    if tokens[0] in NEWLINE_VALS:
+                        current_file_change['newline'] = tokens[0]
+                        if len(tokens) > 1:
+                            inline_path = tokens[1].strip()
+                    else:
+                        inline_path = args.strip()
+                current_modification = None
+                if inline_path:
+                    current_file_change['file_path'] = inline_path
+                    reading_key = None
+                else:
+                    reading_key = 'path'
+
+            elif key in ACTION_KEYS:
+                if not current_file_change:
+                    raise ValueError(f"Action '{key}' on line {line_num} before FILE.")
+                if args:
+                    raise ValueError(f"Action '{key}' on line {line_num} takes no arguments.")
+                current_modification = {'action': key, '_line': line_num}
                 current_file_change['modifications'].append(current_modification)
+
             elif key == 'CREATE':
                 if current_file_change and 'file_path' in current_file_change:
                     # Contextual Creation: CREATE used after FILE.
-                    # The following block is treated as content.
-                    current_modification = {'action': 'CREATE'}
+                    current_modification = {'action': 'CREATE', '_line': line_num}
                     current_file_change['modifications'].append(current_modification)
-                    reading_key = 'content'
-                elif args and args not in {'LF', 'CRLF', 'CR'}:
+                    reading_key = 'CREATE_CONTENT'
+                elif args and args not in NEWLINE_VALS:
                     # Path provided as argument: CREATE path/to/file
                     current_file_change = {'modifications': []}
                     data['changes'].append(current_file_change)
                     current_file_change['file_path'] = args
-
-                    current_modification = {'action': 'CREATE'}
+                    current_modification = {'action': 'CREATE', '_line': line_num}
                     current_file_change['modifications'].append(current_modification)
                     reading_key = 'content'
                 else:
                     # Hybrid: acts as key-value (for path) AND action.
                     reading_key = 'CREATE_PATH'
                     pending_args = args
+
             elif key in VALUE_KEYS:
-                if args: raise ValueError(f"Directive '{key}' on line {line_num} takes no arguments.")
+                if args:
+                    raise ValueError(f"Directive '{key}' on line {line_num} takes no arguments.")
                 if not current_modification and current_file_change and key == 'content':
-                    # Heuristic: A 'content' block directly after 'FILE' implies 'CREATE'.
-                    current_modification = {'action': 'CREATE'}
+                    # Heuristic: a 'content' block directly after 'FILE' implies 'CREATE'.
+                    current_modification = {'action': 'CREATE', '_line': line_num}
                     current_file_change['modifications'].append(current_modification)
-                if key != 'path' and not current_modification: raise ValueError(f"'{key}' on line {line_num} outside modification.")
+                if not current_modification:
+                    raise ValueError(f"'{key}' on line {line_num} outside modification.")
+                if key in ('snippet', 'anchor') and 'content' in current_modification:
+                    # A locator after a finished modification means the model
+                    # forgot to repeat the Action Directive. Silently overwriting
+                    # the previous locator would drop a change without a trace.
+                    previous_action = current_modification.get('action')
+                    if strict:
+                        raise ValueError(
+                            f"Directive '{key}' on line {line_num} starts a new modification "
+                            f"but no Action Directive precedes it.")
+                    warn(f"Missing Action Directive before '{key}' on line {line_num}. "
+                         f"Starting a new '{previous_action}' modification.")
+                    current_modification = {'action': previous_action, '_line': line_num}
+                    current_file_change['modifications'].append(current_modification)
+                elif key in current_modification:
+                    if strict or key == 'content':
+                        raise ValueError(
+                            f"Duplicate '{key}' directive on line {line_num} within one modification.")
+                    warn(f"Duplicate '{key}' on line {line_num}; the last one wins.")
                 reading_key = key
+
             elif key == 'RENAME':
-                if args: raise ValueError(f"Directive '{key}' on line {line_num} takes no arguments.")
-                if not current_file_change: raise ValueError(f"'{key}' on line {line_num} outside file block.")
-                if current_file_change.get('modifications'): raise ValueError(f"'{key}' cannot be combined with other actions in the same file block.")
-                reading_key = 'RENAME'
-            elif key in NEWLINE_VALS:
-                if not current_file_change: raise ValueError(f"Newline '{key}' on line {line_num} before FILE.")
-                current_file_change['newline'] = key
-            # Note: Ambiguous file-level DELETE is no longer parsed here.
-            # It's handled by a structural heuristic in apply_patch.
+                if not current_file_change:
+                    raise ValueError(f"'{key}' on line {line_num} outside file block.")
+                if current_file_change.get('modifications'):
+                    raise ValueError(f"'{key}' on line {line_num} cannot be combined with other actions in the same file block.")
+                if args:
+                    current_file_change['rename_to'] = args.strip()
+                    reading_key = None
+                else:
+                    reading_key = 'RENAME'
+
             elif key in ARG_KEYS:
-                if not current_modification: raise ValueError(f"'{key}' on line {line_num} outside modification.")
-                if not args: raise ValueError(f"Directive '{key}' on line {line_num} requires an argument.")
-                try: current_modification[key] = int(args)
-                except ValueError: raise ValueError(f"Argument for '{key}' on line {line_num} must be an integer.")
-            elif key in NEWLINE_VALS:
-                if not current_file_change: raise ValueError(f"Newline '{key}' on line {line_num} before FILE.")
-                current_file_change['newline'] = key
-            else: raise ValueError(f"Unknown directive '{key}' on line {line_num}.")
+                if not current_modification:
+                    raise ValueError(f"'{key}' on line {line_num} outside modification.")
+                if not args:
+                    raise ValueError(f"Directive '{key}' on line {line_num} requires an argument.")
+                try:
+                    current_modification[key] = int(args)
+                except ValueError:
+                    raise ValueError(f"Argument for '{key}' on line {line_num} must be an integer.")
+
+            else:
+                raise ValueError(f"Unknown directive '{key}' on line {line_num}.")
 
         elif reading_key:
-            if not strict and reading_key in ('path', 'RENAME', 'CREATE_PATH') and line.strip().startswith('#'):
-                pass # Ignore comments inside path values
+            if not strict and reading_key in ('path', 'RENAME', 'CREATE_PATH') and stripped_line.startswith('#'):
+                pass  # Ignore comments inside path values
             else:
                 value_lines.append(line)
-        elif not reading_key and not line.strip():
+        elif not stripped_line:
             pass
-        elif not strict and not reading_key and line.strip().startswith('#'):
-            pass # Allow comments between directives in tolerant mode
-        elif line.strip(): raise ValueError(f"Unexpected content on line {line_num}: '{line}'")
+        elif not strict and stripped_line.startswith('#'):
+            pass  # Allow comments between directives in tolerant mode
+        elif not strict and FENCE_RE.match(line):
+            pass  # Stray markdown fence between directives
+        elif (not strict and current_modification is not None
+              and current_modification.get('action') in ('REPLACE', 'DELETE', 'INSERT_AFTER', 'INSERT_BEFORE')
+              and 'snippet' not in current_modification and 'content' not in current_modification):
+            # The model wrote the locator right after the Action Directive and
+            # forgot the `snippet` keyword.
+            warn(f"Text on line {line_num} follows an Action Directive with no "
+                 f"'snippet' keyword. Treating it as the snippet.")
+            reading_key = 'snippet'
+            value_lines = [line]
+        else:
+            raise ValueError(f"Unexpected content on line {line_num}: '{line}'")
 
-    if reading_key:
-        start = 0
-        while start < len(value_lines) and not value_lines[start].strip(): start += 1
-        end = len(value_lines)
-        while end > start and not value_lines[end - 1].strip(): end -= 1
-        value = "\n".join(value_lines[start:end])
+    flush_value()
 
-        if reading_key == "path" and current_file_change:
-            current_file_change['file_path'] = value
-        elif reading_key == "CREATE_PATH":
-            if value:
-                current_file_change = {'modifications': []}
-                data['changes'].append(current_file_change)
-                current_file_change['file_path'] = value
-                if pending_args in {'LF', 'CRLF', 'CR'}: current_file_change['newline'] = pending_args
-            if not current_file_change: raise ValueError(f"Action 'CREATE' at end of file before FILE.")
-            current_modification = {'action': 'CREATE'}
-            current_file_change['modifications'].append(current_modification)
-        elif current_modification:
-            current_modification[reading_key] = value
-        elif reading_key == 'RENAME' and current_file_change:
-            current_file_change['rename_to'] = value
+    for change in data['changes']:
+        path_value = (change.get('file_path') or '').strip()
+        if not path_value:
+            raise ValueError(
+                "A FILE block has an empty path. The path MUST be given either as "
+                "the value block of the FILE directive or as its inline argument.")
+        if len(path_value.splitlines()) > 1:
+            raise ValueError(f"A FILE block declares a multi-line path: {path_value!r}")
 
     return data
 
@@ -567,20 +757,14 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         err_msg = f"afailed.ap exists at {afailed_path}. Please remove or rename it before running."
         return report_error({"status": "FAILED", "error": {"code": "AFAILED_EXISTS", "message": err_msg}})
 
-    try: data = parse_ap3_format(patch_file, strict=strict)
+    try: data = parse_ap3_format(patch_file, strict=strict, silent=silent)
     except (ValueError, FileNotFoundError) as e:
         err_details = {"status": "FAILED", "error": { "code": "INVALID_PATCH_FILE", "message": str(e) }}
         if create_failure_case:
             create_failure_case_file("afailed.log", err_details, None)
         return report_error(err_details)
 
-    patch_id_str = "00000000"
-    try:
-        with open(patch_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                match = re.match(r'^(\S+)\s+AP\s+3\.1$', line.strip())
-                if match: patch_id_str = match.group(1); break
-    except: pass
+    patch_id_str = data.get('patch_id') or "00000000"
 
     failed_changes_output = []
     write_plan = []
@@ -648,7 +832,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         # If a file block contains exactly one modification, which is a `DELETE`
         # action with no other locators, we treat it as a command to delete the file.
         mods = change.get('modifications', [])
-        if len(mods) == 1 and mods[0].get('action') == 'DELETE' and len(mods[0]) == 1:
+        if len(mods) == 1 and mods[0].get('action') == 'DELETE' and not (set(mods[0]) - {'action', '_line'}):
             if not os.path.exists(file_path):
                 report_idempotency_skip(f"Path to delete does not exist: {file_path}")
                 continue
@@ -1139,7 +1323,7 @@ if __name__ == '__main__':
     parser.add_argument("--failure-report", help="Path to save a detailed JSON report on failure (includes context).")
     parser.add_argument("--create-failure-case", action="store_true", help="On failure, create afailed.log (or afailed.<mod_idx>.log in tolerant mode) with full context for debugging.")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging.")
-    parser.add_argument("-v", "--version", action="version", version="ap patcher 3.1")
+    parser.add_argument("-v", "--version", action="version", version=f"ap patcher {AP_FORMAT_VERSION}")
 
     args = parser.parse_args()
     result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug, args.strict, args.failure_report, args.create_failure_case)
