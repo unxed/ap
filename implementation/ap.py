@@ -192,6 +192,7 @@ def parse_ap3_format(patch_file: str, strict: bool = False, silent: bool = False
     pending_args = None  # To store args for delayed processing (e.g. CREATE)
     directive_pattern = None
     start_idx = 0
+    inside_fenced_block = False
 
     def rebuild_directive_pattern():
         alternatives = "|".join(re.escape(i) for i in known_ids)
@@ -296,7 +297,10 @@ def parse_ap3_format(patch_file: str, strict: bool = False, silent: bool = False
 
         # Adopt (rather than replace) drifted IDs: a model that alternates
         # between two IDs still produces a fully parseable patch.
-        id_drift_match = drift_pattern.match(stripped_line)
+        if FENCE_RE.match(line):
+            inside_fenced_block = not inside_fenced_block
+
+        id_drift_match = None if inside_fenced_block else drift_pattern.match(stripped_line)
         if id_drift_match:
             new_id = id_drift_match.group(1)
             keyword_part = id_drift_match.group(2).split()[0]
@@ -1619,13 +1623,11 @@ if __name__ == '__main__':
     parser.add_argument("--failure-report", help="Path to save a detailed JSON report on failure (includes context).")
     parser.add_argument("--create-failure-case", action="store_true", help="On failure, create afailed.log (or afailed.<mod_idx>.log in tolerant mode) with full context for debugging.")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging.")
-    parser.add_argument("--no-final-newline", action="store_true", help="Do not append a trailing newline to rewritten files.")
     parser.add_argument("-v", "--version", action="version", version=f"ap patcher {AP_FORMAT_VERSION}")
 
     args = parser.parse_args()
     result = apply_patch(args.patch_file, args.dir, args.dry_run, args.json_report, args.debug,
-                         args.strict, args.failure_report, args.create_failure_case,
-                         ensure_final_newline=not args.no_final_newline)
+                         args.strict, args.failure_report, args.create_failure_case)
 
     if args.json_report and result['status'] != 'SUCCESS':
         print(json.dumps(result, indent=2))

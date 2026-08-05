@@ -208,4 +208,19 @@ CASES = [
         "expect_files": {"a.txt": "ONE\n"},
         "expect_missing": ["afailed.md"],
     },
+    {
+        "name": "c26_an_ap_example_inside_content_is_not_mistaken_for_drift",
+        "files": {"doc.md": "old\n"},
+        "patch": ("aa000026 AP 3.2\n\naa000026 FILE\ndoc.md\n\naa000026 RECREATE\naa000026 content\n"
+                  "Example:\n\n```\ne4a2f1b8 FILE\nx.py\n\ne4a2f1b8 REPLACE\ne4a2f1b8 snippet\n"
+                  "old\ne4a2f1b8 content\nnew\n```\n\nEnd."),
+        "expect_files": {"doc.md": "Example:\n\n```\ne4a2f1b8 FILE\nx.py\n\ne4a2f1b8 REPLACE\n"
+                                   "e4a2f1b8 snippet\nold\ne4a2f1b8 content\nnew\n```\n\nEnd."},
+    },
+    {
+        "name": "c27_cli_entry_point_is_importable_and_consistent",
+        "files": {"a.txt": "one\n"},
+        "patch": "aa000027 AP 3.2\n\naa000027 FILE\na.txt\n\naa000027 REPLACE\naa000027 snippet\none\naa000027 content\nONE\n",
+        "expect_files": {"a.txt": "ONE\n"},
+    },
 ]
