@@ -803,10 +803,8 @@ FIX_HINTS = {
 
 def _fence(text: str, lang: str = "") -> str:
     body = text if text.endswith('\n') else text + '\n'
-    fence = "```"
-    while fence in body:
-        fence += "`"
-    return f"{fence}{lang}\n{body}{fence}\n"
+    label = f" {lang.upper()}" if lang else ""
+    return f"--- BEGIN{label} ---\n{body}--- END{label} ---\n"
 
 
 def _numbered(text: str, limit: int = 400) -> str:
