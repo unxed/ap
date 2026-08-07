@@ -217,10 +217,42 @@ CASES = [
         "expect_files": {"doc.md": "Example:\n\n```\ne4a2f1b8 FILE\nx.py\n\ne4a2f1b8 REPLACE\n"
                                    "e4a2f1b8 snippet\nold\ne4a2f1b8 content\nnew\n```\n\nEnd."},
     },
-    {
-        "name": "c27_cli_entry_point_is_importable_and_consistent",
-        "files": {"a.txt": "one\n"},
-        "patch": "aa000027 AP 3.2\n\naa000027 FILE\na.txt\n\naa000027 REPLACE\naa000027 snippet\none\naa000027 content\nONE\n",
-        "expect_files": {"a.txt": "ONE\n"},
-    },
-]
+        {
+            "name": "c27_cli_entry_point_is_importable_and_consistent",
+            "files": {"a.txt": "one\n"},
+            "patch": "aa000027 AP 3.2\n\naa000027 FILE\na.txt\n\naa000027 REPLACE\naa000027 snippet\none\naa000027 content\nONE\n",
+            "expect_files": {"a.txt": "ONE\n"},
+        },
+        {
+            "name": "c28_redundant_project_prefix_creation",
+            "files": {"src/a.txt": "old content\n"},
+            "patch": (
+                "bb000028 AP 3.2\n\n"
+                "bb000028 FILE\n"
+                "my_project/src/new_file.txt\n\n"
+                "bb000028 CREATE\n"
+                "bb000028 content\n"
+                "New file created successfully!\n"
+            ),
+        "expect_files": {
+            "src/new_file.txt": "New file created successfully!"
+        },
+        },
+        {
+            "name": "c29_redundant_project_prefix_existing_file",
+            "files": {"src/a.txt": "old content\n"},
+            "patch": (
+                "cc000029 AP 3.2\n\n"
+                "cc000029 FILE\n"
+                "my_project/src/a.txt\n\n"
+                "cc000029 REPLACE\n"
+                "cc000029 snippet\n"
+                "old content\n"
+                "cc000029 content\n"
+                "new content\n"
+            ),
+            "expect_files": {
+                "src/a.txt": "new content\n"
+            },
+        },
+    ]

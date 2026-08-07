@@ -1034,13 +1034,31 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     found = True
                     break
 
+            # If the file does not exist, check if a subdirectory inside the remaining path exists,
+            # while the leading prefix does not. E.g. 'my_project/src/new_file.py' when 'src' exists as a directory
+            # but 'my_project' does not, and we are running inside 'my_project' (or 'my_project-master' etc).
+            if not found:
+                for i in range(1, len(parts)):
+                    prefix_parts = parts[:i]
+                    prefix_path = os.path.join(project_dir, *prefix_parts)
+                    target_dir_path = os.path.join(project_dir, parts[i])
+                    if not os.path.exists(prefix_path) and os.path.isdir(target_dir_path):
+                        relative_path = '/'.join(parts[i:])
+                        stripped_prefix = '/'.join(parts[:i])
+                        found = True
+                        break
+
             if not found:
                 project_dir_abs = os.path.abspath(project_dir).replace('\\', '/')
+                project_dir_name = os.path.basename(project_dir_abs)
                 for i in range(len(parts) - 1, 0, -1):
                     prefix = '/'.join(parts[:i])
-                    if project_dir_abs.endswith('/' + prefix) or project_dir_abs == prefix:
+                    if (project_dir_abs.endswith('/' + prefix) or
+                        project_dir_abs == prefix or
+                        (len(prefix) >= 2 and (project_dir_name.startswith(prefix) or prefix.startswith(project_dir_name)))):
                         relative_path = '/'.join(parts[i:])
                         stripped_prefix = prefix
+                        found = True
                         break
 
         # SECURITY: Perform path validation before any filesystem operations.
