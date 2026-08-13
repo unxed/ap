@@ -1,4 +1,4 @@
-### The 'ap' (AI-friendly Patch) Format - Version 3.1
+### The 'ap' (AI-friendly Patch) Format - Version 3.2
 
 ## Abstract
 
@@ -13,7 +13,7 @@ The `ap` format is built on a specific philosophy: **Adapt the tool to the AI, n
 Large Language Models are probabilistic, not deterministic. They struggle with strict counting (line numbers), rigid syntax (JSON/YAML), and perfect consistency. Traditional tools force the AI to perform tasks it is bad at. `ap` takes the opposite approach:
 
 1.  **Ambiguity is expected:** The tool should use heuristics (like context or locality) to resolve the "which function did you mean?" problem, rather than failing immediately.
-2.  **Flexibility is Key:** If an AI forgets the `AP 3.1` header, places comments before it, or uses `anchor` instead of `snippet`, the tool should forgive these format deviations and correctly infer the intent.
+2.  **Flexibility is Key:** If an AI forgets the `AP 3.2` header, places comments before it, or uses `anchor` instead of `snippet`, the tool should forgive these format deviations and correctly infer the intent.
 ## 1. Introduction
 
 ### 1.1. The Problem with Traditional and Structured Formats
@@ -50,7 +50,7 @@ An `ap` patch file MUST be a plain text file encoded in UTF-8. The format is lin
 Any lines at the beginning of the file starting with `#` or any other text before the header directive MUST be ignored by the Patcher.
 
 The header directive MUST be:
-`[ID] AP 3.1`
+`[ID] AP 3.2`
 
 - `[ID]` is a unique identifier for the entire patch, which MUST be a sequence of exactly 8 random characters, each being a valid hexadecimal character (digit 0–9 or a lowercase letter a–f). E.g., `a0b1c2f9`. Semantic or descriptive names (e.g., `fix_bug`, `update_file`) MUST NOT be used.
 - This `[ID]` MUST be used as a prefix for all subsequent directives within the same file.
@@ -121,12 +121,14 @@ These directives provide the data for a modification. A `snippet` or `anchor` MU
 - `snippet`: A string of code to locate. If `snippet_tail` is also provided, this marks the beginning of the range.
 - `anchor`: An OPTIONAL string of code to narrow the search scope for a `snippet`.
 - `content`: The new code to be used for the operation. MUST be present for `REPLACE`, `INSERT_AFTER`, `INSERT_BEFORE`, and `RECREATE`. For `CREATE`, its presence indicates file creation, and its absence indicates directory creation. MUST be omitted for `DELETE`.
+  An **empty** `content` value for `REPLACE` is semantically equivalent to `DELETE`, and a Patcher SHOULD accept it as such, **except** when the empty block is the last thing in the patch file: an unterminated empty value block is indistinguishable from an answer that was cut off mid-generation, and MUST be rejected as a truncated patch. Appending an `[ID] END` directive terminates the block and therefore proves the emptiness was deliberate. The same rule applies to `RECREATE`, where an empty `content` truncates the target file.
 - `snippet_tail`: An OPTIONAL string of code that marks the end of a range. It MUST be used together with `snippet`.
 
 **Option Directives (KEY-ARGS)**
 These directives provide optional parameters for a modification.
 - `include_leading_blank_lines [N]`: Expands the selection to include up to `[N]` blank lines before the snippet.
 - `include_trailing_blank_lines [N]`: Expands the selection to include up to `[N]` blank lines after the snippet.
+- `scope_end [1]`: Extends the located region to the end of the block that the `snippet` opens. The argument is OPTIONAL and exists only for symmetry with the directives above. With `scope_end`, a `snippet` consisting of a single declaration line (`func foo() {`, `class Bar:`, `def baz(self):`) addresses the **entire construct**, so `REPLACE` and `DELETE` can operate on a whole function without a `snippet_tail`, and `INSERT_AFTER` places content after the construct's closing line rather than after its header. A Patcher SHOULD determine the block boundary from bracket nesting where the language uses brackets, and from indentation otherwise. If the `snippet` does not open a block, the Patcher SHOULD ignore the directive with a warning.
 ### 2.6. End Directive
 
 A patch file MAY end with an `END` directive.
@@ -183,6 +185,8 @@ When these boundary markers are used, normal text searching for them is bypassed
 1.  The Patcher first locates the `snippet` following the same uniqueness and scoping rules as a normal `snippet` (i.e., it must be unique within the file or within its `anchor`).
 2.  After finding the `snippet`, the Patcher searches for the *first* occurrence of the `snippet_tail` that appears *after* the end of the `snippet`.
 3.  If the `snippet` is found but the `snippet_tail` is not found in the remainder of the search scope, the Patcher MUST report an error. The entire region from the beginning of the `snippet` to the end of the `snippet_tail` is considered the target for the modification.
+**Self-Written Text**: A locator MUST NOT resolve against text that the current patch run has itself inserted into the file. A Patcher MUST therefore track the *set of regions* it has written (a single cursor position cannot express this) and exclude matches lying entirely inside them. Without this rule a patch that adds a line in one modification and edits a similar line in the next will either patch its own output or, worse, conclude from an idempotency check that the second modification "is already applied" and skip a requested change silently. The exclusion MUST NOT apply when the same locator is deliberately repeated across several modifications, which is the documented way to address N identical blocks in order.
+
 **Sequential Cursoring**: A Patcher MUST process modifications for a single file sequentially. After a modification is successfully calculated (in memory), the patcher MUST record the end position of the change. All subsequent searches (`anchor` or `snippet`) for the same file MUST begin *after* this recorded end position. This ensures that patches are always applied from top to bottom, preventing ambiguous matches with code that has already been processed.
 
 ### 3.3. Modification Logic
@@ -193,9 +197,18 @@ When these boundary markers are used, normal text searching for them is bypassed
 
 - **Insertion Context Awareness**: When generating `INSERT_AFTER` or `INSERT_BEFORE` actions to insert code inside a function or block, an AI generating the patch MUST ensure that inserted content does not appear between a declaration line and its opening brace or indentation block. Insertions intended to go *inside* a block MUST use a `snippet` that includes the opening brace or the start of the indented block to guarantee syntactic correctness.
 
+- **Insertion Context Awareness (the other direction)**: To insert a new **top-level** declaration, an `INSERT_AFTER` `snippet` MUST NOT be a line that *opens* a block. `INSERT_AFTER` on `func foo() error {` places the new declaration between the signature and the body, producing code that applies cleanly and does not compile. To add a declaration next to an existing one, an AI MUST use one of:
+    1.  `INSERT_AFTER` with `scope_end 1` on the neighbouring declaration's header line;
+    2.  `INSERT_BEFORE` on the first line of the *next* top-level declaration;
+    3.  `REPLACE` on the next declaration's header line, with `content` consisting of the new code, a blank line, and the replaced line (see §4.3, "Inserting with Surrounding Blank Lines").
+
 ### 3.4. Error Handling
 
 The Patcher MUST provide clear, human-readable error messages for failure conditions, including but not limited to target file not found, anchor/snippet not found, or ambiguous matches.
+
+**Overlapping Modifications**: When a locator cannot be found, the Patcher SHOULD determine whether it was present in the file *before* the patch and was removed by an earlier modification of the same patch. This is a common generation error - one modification replaces a block and a later one targets a line that lived inside it - and reporting it as a plain "snippet not found" sends the generating model looking for a change it did not make. The Patcher SHOULD report a distinct condition naming the modification that consumed the locator.
+
+**Structural Sanity**: After applying all modifications to a file, the Patcher SHOULD compare the file's bracket balance before and after. A file that was balanced before the patch and is not balanced after it is almost certainly no longer valid source code, even though every modification applied cleanly. This SHOULD be reported as a warning rather than a failure, since bracket counting cannot account for every language.
 
 ### 3.5. Post-processing
 
@@ -205,12 +218,15 @@ The Patcher MUST remove all trailing whitespace characters (spaces and tabs) fro
 To improve reliability when consuming patches generated by AI, a Patcher SHOULD implement the following heuristics to gracefully handle common generation errors.
 
 -   **Hybrid Search ("Soft Start, Strict Tail"):** When searching for a multi-line `anchor` or `snippet`, the search algorithm SHOULD match the *first line* of the locator as a **suffix** of a line in the target file, while requiring all *subsequent lines* of the locator to match **exactly**. This makes the patch resilient to minor, non-semantic prefix variations (e.g., list numbers, bullet points) that AI models often add or omit in the first line of a code block. The uniqueness requirement for the entire matched block MUST be maintained.
+    For a **single-line** locator there are no subsequent lines to constrain the match, so the suffix relaxation MUST be limited to prefixes that carry no meaning: whitespace, comment openers, bullets, diff markers and list numbering. An unrestricted suffix match accepts `self.count = 0` for the locator `count = 0` and destroys the `self.` prefix on `REPLACE` — a silent corruption, not a failed match.
 -   **Range Auto-Correction:** When processing a `REPLACE` or `DELETE` action with a `snippet`/`snippet_tail` pair, the Patcher SHOULD first check if the `snippet_tail` is a suffix of the `snippet`. If it is, the Patcher SHOULD treat this as a single-snippet operation, use the `snippet` for it and ignore the `snippet_tail`. This corrects a frequent AI error where the entire block to be replaced is put into `snippet`, causing a "end snippet not found" failure.
 -   **Ambiguous Anchor Disambiguation:** If an `anchor` is found multiple times in the target file, the Patcher SHOULD NOT immediately fail. Instead, it SHOULD temporarily search for the target `snippet` within the scope of *each* anchor occurrence. If the `snippet` is found relative to exactly one of the anchor occurrences, the Patcher MUST proceed using that specific anchor, resolving the ambiguity based on the uniqueness of the anchor-snippet pair.
 -   **Contextual Creation Heuristic:** If a `CREATE` directive follows a `FILE` directive within the same file block, the Patcher SHOULD treat the `CREATE` directive as an action and the subsequent value block as the `content` of the file. This handles cases where an AI model uses `CREATE` as a semantic marker for content rather than a path-providing directive.
 -   **Implicit File Creation:** If a `FILE` block contains only a `content` directive and no Action Directives, the Patcher SHOULD treat this as a `CREATE` action for that file. This handles a common LLM error where `CREATE` is omitted.
--   **Missing Header / Comment Tolerance:** If the patch lacks the standard `[ID] AP 3.1` header or has comments preceding it, the Patcher SHOULD attempt to extract the patch ID from the first valid Action or File Directive. It SHOULD also ignore comments (`#`) interspersed between directives.
+-   **Missing Header / Comment Tolerance:** If the patch lacks the standard `[ID] AP 3.2` header or has comments preceding it, the Patcher SHOULD attempt to extract the patch ID from the first valid Action or File Directive. It SHOULD also ignore comments (`#`) interspersed between directives.
 -   **Anchor as Snippet Fallback:** If an action (`REPLACE`, `DELETE`, `INSERT_AFTER`, `INSERT_BEFORE`) provides an `anchor` but omits the mandatory `snippet`, the Patcher SHOULD promote the `anchor` to act as the `snippet`.
+-   **Nesting Guard for Insertions:** Before applying an `INSERT_AFTER` or `INSERT_BEFORE`, a Patcher SHOULD compare the nesting level of the insertion point with the nesting level implied by `content`. If the insertion point lies inside a block while `content` is a self-contained declaration written at column 0, the model located the *header* of the enclosing construct instead of its end. The Patcher SHOULD move the insertion point past the end (or before the start) of the enclosing block and warn, and MUST report an error in Strict Mode. The check MUST be conservative: content that opens no block of its own is a dropped indent, and content opening a control-flow or closure block genuinely belongs where it was placed.
+-   **Empty `content` as `DELETE`:** A `REPLACE` whose `content` block is empty and is terminated by a following directive SHOULD be applied as a `DELETE` (see §2.5).
 -   **Anchor Overlap and Containment Tolerance:** If the `anchor` and `snippet` overlap or one is entirely contained within the other, the Patcher MUST detect this relationship. Instead of beginning the search scope strictly after the located anchor, the Patcher MUST expand the search scope to start at the beginning of the anchor, allowing overlapping or nested lines to resolve successfully.
 
 
@@ -229,7 +245,8 @@ To create robust and minimal patches, an AI model MUST follow a specific hierarc
     -   A **range change** involves deleting or replacing a larger block of code (three or more lines).
 
 2.  **Choose the Locator Type Based on the Change**:
-    -   For a **range change** (`REPLACE` or `DELETE`), the AI SHOULD use the `snippet`/`snippet_tail` pair.
+    -   For a **range change** (`REPLACE` or `DELETE`) that covers exactly one syntactic construct (a function, method, class or block), the AI SHOULD use a single `snippet` holding the construct's header line together with `scope_end 1`. This is both shorter and more stable than a `snippet`/`snippet_tail` pair, because it cannot pick the wrong closing line.
+    -   For any other **range change** (`REPLACE` or `DELETE`), the AI SHOULD use the `snippet`/`snippet_tail` pair.
     -   For a **point change** (`REPLACE`, `DELETE`, `INSERT_AFTER`, `INSERT_BEFORE`), the AI MUST use a single `snippet`.
 
 3.  **Select the Snippet(s) and Anchor (if needed)**: After choosing the locator type, the AI proceeds to select the content for the fields:
@@ -321,7 +338,7 @@ The following `afix.ap` file describes the modifications:
 #   2. Update the `add` function to also handle summing a list of numbers.
 #   3. Remove the unused `get_pi` function.
 
-e4a2f1b8 AP 3.1
+e4a2f1b8 AP 3.2
 
 e4a2f1b8 FILE
 src/calculator.py

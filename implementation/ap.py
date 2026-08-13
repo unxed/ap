@@ -84,7 +84,7 @@ AP_SUPPORTED_VERSIONS = ("3.0", "3.1", "3.2")
 # Canonical directive keywords of the format.
 ACTION_KEYS = {'REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE', 'DELETE', 'RECREATE'}
 VALUE_KEYS = {'snippet', 'anchor', 'content', 'snippet_tail'}
-ARG_KEYS = {'include_leading_blank_lines', 'include_trailing_blank_lines'}
+ARG_KEYS = {'include_leading_blank_lines', 'include_trailing_blank_lines', 'scope_end'}
 NEWLINE_VALS = {'LF', 'CRLF', 'CR'}
 CANONICAL_KEYS = ACTION_KEYS | VALUE_KEYS | ARG_KEYS | {'FILE', 'CREATE', 'RENAME', 'END'}
 
@@ -102,7 +102,14 @@ KEY_ALIASES = {
     'snippet_end': 'snippet_tail', 'end_snippet': 'snippet_tail', 'tail': 'snippet_tail',
     'new_content': 'content', 'code': 'content', 'body': 'content',
     'scope': 'anchor',
+    'whole_block': 'scope_end', 'block_end': 'scope_end', 'to_scope_end': 'scope_end',
 }
+
+# Prefixes that a model may prepend to the first line of a quoted code block
+# without changing its meaning: indentation, comment openers, bullets, diff
+# markers and list numbering. Anything containing identifier characters is a
+# real part of the line and MUST NOT be dropped by the suffix heuristic.
+DECORATION_PREFIX_RE = re.compile(r'^[\s#/*>+\-\u2022\u00b7\[\]().\d]*$')
 
 FENCE_RE = re.compile(r'^\s*(?:`{3,}|~{3,})\s*[\w+.#-]*\s*$')
 HEADER_RE = re.compile(r'^(\S+)\s+AP\s+v?(\d+(?:\.\d+)?)\s*$', re.IGNORECASE)
@@ -244,14 +251,21 @@ def parse_ap3_format(patch_file: str, strict: bool = False, silent: bool = False
 
     paramless = r'(RECREATE|REPLACE|INSERT_AFTER|INSERT_BEFORE|DELETE|CREATE|snippet|anchor|content|snippet_tail|RENAME|END)'
     file_dir = r'(FILE(?:\s+\S.*)?)'
-    include_dir = r'((?:include_leading_blank_lines|include_trailing_blank_lines)\s+\d+)'
+    include_dir = r'((?:include_leading_blank_lines|include_trailing_blank_lines|scope_end)(?:\s+\d+)?)'
     drift_pattern = re.compile(rf'^(\S+)\s+({paramless}|{file_dir}|{include_dir})$')
 
-    def flush_value():
+    def flush_value(at_eof: bool = False):
         """Commits the collected value block to the directive that opened it."""
         nonlocal current_file_change, current_modification, reading_key, value_lines, pending_args
         if not reading_key:
             return
+        # A value block closed by the END of the file is the one place where an
+        # empty block is ambiguous: it may be deliberate, or the answer may have
+        # been cut off mid-generation. A block closed by a following directive is
+        # provably complete. Recording which one it was lets the patcher accept
+        # deliberate emptiness and still refuse truncated patches.
+        if at_eof and current_modification is not None and reading_key in VALUE_KEYS:
+            current_modification['_eof_value'] = reading_key
         start = 0
         while start < len(value_lines) and not value_lines[start].strip():
             start += 1
@@ -417,6 +431,10 @@ def parse_ap3_format(patch_file: str, strict: bool = False, silent: bool = False
                 if not current_modification:
                     raise ValueError(f"'{key}' on line {line_num} outside modification.")
                 if not args:
+                    if key == 'scope_end':
+                        # A flag, not a count: accept it with or without the `1`.
+                        current_modification[key] = 1
+                        continue
                     raise ValueError(f"Directive '{key}' on line {line_num} requires an argument.")
                 try:
                     current_modification[key] = int(args)
@@ -449,7 +467,7 @@ def parse_ap3_format(patch_file: str, strict: bool = False, silent: bool = False
         else:
             raise ValueError(f"Unexpected content on line {line_num}: '{line}'")
 
-    flush_value()
+    flush_value(at_eof=True)
 
     for change in data['changes']:
         path_value = (change.get('file_path') or '').strip()
@@ -545,8 +563,18 @@ def smart_find(content: str, snippet: str) -> List[Tuple[int, int]]:
 
         if len(content_lines_found) == len(snippet_lines):
             normalized_content_lines = [line.strip() for line in content_lines_found]
-            # HYBRID SEARCH: First line is suffix, rest are exact match.
+            # HYBRID SEARCH: first line is matched as a suffix, the rest exactly.
             first_line_match = normalized_content_lines[0].endswith(normalized_snippet_lines[0])
+            # The suffix relaxation exists to absorb non-semantic decoration a
+            # model prepends to the first line of a quoted block (list numbering,
+            # bullets, comment markers, diff signs). Unrestricted, it accepts
+            # `self.count = 0` for the locator `count = 0` and REPLACE then
+            # destroys the `self.` prefix - a silent corruption, not a failed
+            # match. So the dropped prefix has to look like decoration.
+            if (first_line_match
+                    and len(normalized_content_lines[0]) != len(normalized_snippet_lines[0])):
+                dropped = normalized_content_lines[0][:-len(normalized_snippet_lines[0])]
+                first_line_match = bool(DECORATION_PREFIX_RE.match(dropped))
             tail_match = normalized_content_lines[1:] == normalized_snippet_lines[1:]
             if first_line_match and tail_match:
                 start_pos = len("".join(original_lines[:i]))
@@ -603,10 +631,227 @@ def find_partial_line_matches(content: str, snippet: Optional[str], limit: int =
                 break
     return hits
 
+# --- Structural awareness --------------------------------------------------
+# The patcher cannot parse every language, but a bracket counter that skips
+# strings and comments is enough to answer the two questions that cause most
+# structurally broken output: "am I about to insert top-level code inside a
+# block?" and "where does the block opened by this snippet end?".
+
+_LINE_COMMENTS = ('//', '#', '--')
+
+# Words that open a declaration (the thing that lives at file scope) versus
+# words that open a control-flow or closure block (the thing that legitimately
+# lives inside another block).
+DECLARATION_KEYWORDS = {
+    'func', 'function', 'def', 'class', 'struct', 'interface', 'enum', 'impl',
+    'trait', 'type', 'fn', 'namespace', 'module', 'package', 'const', 'let',
+    'var', 'export', 'public', 'private', 'protected', 'static', 'abstract',
+    'template', 'record', 'object', 'proc', 'sub',
+}
+CONTROL_KEYWORDS = {
+    'if', 'else', 'elif', 'for', 'foreach', 'while', 'switch', 'case', 'do',
+    'try', 'catch', 'except', 'finally', 'go', 'defer', 'select', 'with',
+    'match', 'when', 'return', 'loop', 'unless', 'repeat',
+}
+
+def line_start_depths(content: str, clamp: bool = True) -> Tuple[List[int], List[int]]:
+    """
+    Returns (line start offsets, bracket nesting depth at each line start).
+
+    String literals, line comments and /* */ blocks are skipped so that braces
+    inside them do not distort the depth.
+    """
+    starts: List[int] = [0]
+    depths: List[int] = [0]
+    depth = 0
+    in_string: Optional[str] = None
+    in_block_comment = False
+    escaped = False
+    i, n = 0, len(content)
+    line_comment = False
+    while i < n:
+        ch = content[i]
+        if ch == '\n':
+            line_comment = False
+            if in_string in ("'", '"'):
+                in_string = None  # unterminated quote: do not swallow the rest of the file
+            escaped = False
+            starts.append(i + 1)
+            depths.append(depth)
+            i += 1
+            continue
+        if in_block_comment:
+            if ch == '*' and content.startswith('*/', i):
+                in_block_comment = False
+                i += 2
+                continue
+            i += 1
+            continue
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == '\\':
+                escaped = True
+            elif ch == in_string:
+                in_string = None
+            i += 1
+            continue
+        if line_comment:
+            i += 1
+            continue
+        if content.startswith('/*', i):
+            in_block_comment = True
+            i += 2
+            continue
+        if any(content.startswith(c, i) for c in _LINE_COMMENTS):
+            line_comment = True
+            i += 1
+            continue
+        if ch in ('"', "'", '`'):
+            in_string = ch
+        elif ch in '([{':
+            depth += 1
+        elif ch in ')]}':
+            # Clamping keeps the per-line depths usable for block scanning even
+            # in files with stray closers; the balance check needs the raw count,
+            # otherwise an extra `}` is invisible.
+            depth = max(0, depth - 1) if clamp else depth - 1
+        i += 1
+    if starts[-1] != n:
+        pass
+    return starts, depths
+
+def net_bracket_depth(text: str) -> int:
+    """Bracket balance of a whole text, ignoring strings and comments."""
+    _, depths = line_start_depths(text + '\n', clamp=False)
+    return depths[-1] if depths else 0
+
+def line_index_at(starts: List[int], offset: int) -> int:
+    lo, hi = 0, len(starts) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if starts[mid] <= offset:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+def indent_width(line: str) -> int:
+    return len(line) - len(line.lstrip(' \t'))
+
+def resolve_scope_end(content: str, start_pos: int, end_pos: int) -> Optional[int]:
+    """
+    Extends a located region to the end of the block its snippet opens.
+
+    Brace languages are handled by nesting depth; indentation languages by the
+    indent of the snippet's first line. Returns None when the snippet does not
+    open a block at all.
+    """
+    starts, depths = line_start_depths(content)
+    lines = content.split('\n')
+    i0 = line_index_at(starts, start_pos)
+    i1 = line_index_at(starts, max(end_pos - 1, start_pos))
+    base_depth = depths[i0]
+    depth_after = depths[i1 + 1] if i1 + 1 < len(depths) else base_depth
+
+    if depth_after > base_depth:
+        for j in range(i1 + 1, len(starts)):
+            if depths[j] <= base_depth:
+                return starts[j]
+        return len(content)
+
+    # Indentation languages: the block is everything indented deeper than the
+    # snippet's first line.
+    base_indent = indent_width(lines[i0])
+    opener = lines[i1].rstrip()
+    if not opener.endswith(':'):
+        return None
+    for j in range(i1 + 1, len(lines)):
+        if not lines[j].strip():
+            continue
+        if indent_width(lines[j]) <= base_indent:
+            return starts[j]
+    return len(content)
+
+def top_level_insert_correction(content: str, pos: int, new_content: str, after: bool) -> Optional[int]:
+    """
+    Detects the single most damaging insertion mistake: a self-contained
+    top-level declaration inserted between a declaration line and the body it
+    opens, producing `func A() {` / `func B() {` / `}` / `}`.
+
+    Returns the corrected offset, or None if the insertion point is fine.
+    Deliberately limited to brace languages: for indentation languages a
+    column-0 `content` is far more often a dropped indent (already handled by
+    reindent_content) than a misplaced top-level block.
+    """
+    body = [l for l in (new_content or '').split('\n') if l.strip()]
+    if not body or indent_width(body[0]) > 0:
+        return None
+    starts, depths = line_start_depths(content)
+    idx = line_index_at(starts, pos)
+    if depths[idx] <= 0:
+        return None
+    # The inserted block must be self-contained, otherwise it really does belong
+    # inside the enclosing block.
+    # Trailing newline forces a final entry, so inner[-1] is the net depth of
+    # the whole block rather than the depth at its last line.
+    _, inner = line_start_depths(new_content + '\n')
+    if inner and inner[-1] != 0:
+        return None
+    # `content` must itself open a block. A bare statement at column 0 is a
+    # dropped indent (reindent_content's job), not a misplaced declaration -
+    # moving it out of the enclosing block would be the worse error.
+    if not inner or max(inner) == 0:
+        return None
+    # ... and it must look like a DECLARATION. A nested closure or a control
+    # block written at column 0 is also self-contained, but it genuinely belongs
+    # where the model put it.
+    head = body[0].strip()
+    token = re.match(r'[A-Za-z_@#][\w]*', head)
+    if not token:
+        return None
+    if token.group(0) in CONTROL_KEYWORDS:
+        return None
+    if token.group(0) not in DECLARATION_KEYWORDS and not head.rstrip().endswith(('{', ':')):
+        return None
+    if after:
+        for j in range(idx, len(starts)):
+            if depths[j] == 0:
+                return starts[j]
+        return len(content)
+    for j in range(idx, -1, -1):
+        if depths[j] == 0:
+            return starts[j]
+    return 0
+
 def line_number_at(content: str, offset: int) -> int:
     return content.count('\n', 0, offset) + 1
 
-def find_target_in_content(content: str, anchor: Optional[str], snippet: str, debug: bool = False, last_match_end: int = 0, allow_repeat: bool = False) -> Tuple[Optional[Tuple[int, int]], Dict[str, Any]]:
+def shift_dirty(dirty: List[Tuple[int, int]], start: int, end: int, new_len: int) -> List[Tuple[int, int]]:
+    """
+    Keeps the `dirty` map valid after an edit replaced [start, end) with new_len chars.
+
+    Regions before the edit keep their offsets, regions after it slide by the
+    length delta, and regions the edit overwrote are dropped - the newly written
+    span replaces them.
+    """
+    delta = new_len - (end - start)
+    updated = []
+    for a, b in dirty:
+        if b <= start:
+            updated.append((a, b))
+        elif a >= end:
+            updated.append((a + delta, b + delta))
+        # else: overwritten by this edit, drop it.
+    if new_len > 0:
+        updated.append((start, start + new_len))
+    return sorted(updated)
+
+def is_dirty(span: Tuple[int, int], dirty: List[Tuple[int, int]]) -> bool:
+    """True if `span` lies entirely inside text this patch run wrote itself."""
+    return any(a <= span[0] and span[1] <= b for a, b in dirty)
+
+def find_target_in_content(content: str, anchor: Optional[str], snippet: str, debug: bool = False, last_match_end: int = 0, allow_repeat: bool = False, dirty: Optional[List[Tuple[int, int]]] = None, dirty_strict: bool = False) -> Tuple[Optional[Tuple[int, int]], Dict[str, Any]]:
     if not anchor:
         if snippet and snippet.strip() == '^':
             return (0, 0), {}
@@ -620,6 +865,15 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
         anchor_occurrences = smart_find(content, anchor)
         if not anchor_occurrences:
             return None, {"code": "ANCHOR_NOT_FOUND", "message": "Anchor not found.", "context": {"anchor": anchor}}
+
+        # An anchor duplicated by this patch's own output is not a real second
+        # anchor. Filtering here turns a spurious AMBIGUOUS_ANCHOR back into a
+        # clean resolution; the fallback keeps anchors that only exist in
+        # freshly written code usable.
+        if dirty:
+            clean_anchors = [a for a in anchor_occurrences if not is_dirty(a, dirty)]
+            if clean_anchors:
+                anchor_occurrences = clean_anchors
 
         # === CURSOR FILTERING FOR ANCHORS ===
         # If we have a history of changes, prefer anchors that appear AFTER the last change.
@@ -697,6 +951,24 @@ def find_target_in_content(content: str, anchor: Optional[str], snippet: str, de
     debug_print(debug, "SNIPPET SEARCH", snippet=snippet, search_space_len=len(search_space))
     occurrences = smart_find(search_space, snippet)
 
+    # === SELF-WRITTEN TEXT FILTER ===
+    # A locator must never resolve against text this very patch run has just
+    # inserted, otherwise a later modification silently patches the output of an
+    # earlier one (or an idempotency probe finds its own replacement content and
+    # reports "already applied"). The cursor alone cannot express this: it is a
+    # scalar, while the regions we wrote are a set of intervals.
+    if dirty and occurrences:
+        clean = [o for o in occurrences if not is_dirty((o[0] + offset, o[1] + offset), dirty)]
+        if clean:
+            occurrences = clean
+        elif dirty_strict:
+            # Probes (idempotency) must not fall back: matching our own output is
+            # exactly the false positive we are guarding against.
+            occurrences = []
+        else:
+            debug_print(debug, "DIRTY FALLBACK",
+                        message="All matches lie in text written by this patch; using them anyway.")
+
     # === SNIPPET CURSOR FILTER ===
     # Matches before the cursor belong to already-processed regions, so they are
     # never candidates. This is what makes sequential top-to-bottom patching work.
@@ -755,6 +1027,11 @@ FIX_HINTS = {
         "unique construct above the target (a function signature, a class line, a unique comment). "
         "If you really meant to change every occurrence, emit one modification per occurrence, all "
         "with the same locator, in top-to-bottom order.",
+    "LOCATOR_CONSUMED":
+        "The locator was present in the original file, but an earlier modification in THIS patch "
+        "replaced or deleted the region containing it. Do not restate a change you have already "
+        "made: fold the second edit into the `content` of the first one, or rewrite its locator "
+        "against the text as it looks AFTER the earlier modification.",
     "SNIPPET_NOT_FOUND":
         "The `snippet` does not exist in the search scope. Copy the locator verbatim from the "
         "'Current content' section below - do not retype it from memory. Remember that a locator "
@@ -771,8 +1048,11 @@ FIX_HINTS = {
         "marks the *end* of the block and must appear strictly after `snippet` in the file. Do not "
         "put the whole block into `snippet`, and do not repeat `content` in `snippet_tail`.",
     "EMPTY_REPLACE":
-        "`REPLACE` with empty `content` is refused because it is indistinguishable from a truncated "
-        "answer. Use `DELETE` to remove code.",
+        "`REPLACE` with empty `content` is refused in strict mode. Use `DELETE` to remove code.",
+    "PATCH_TRUNCATED":
+        "The patch file ends with an empty `content` block, which is what a cut-off answer looks "
+        "like. Re-emit the patch in full. Appending an `[ID] END` directive proves the patch is "
+        "complete and makes a deliberately empty `content` acceptable.",
     "MISSING_CONTENT":
         "The action requires a `content` block and none was given. Check that the answer was not cut "
         "off and that the `content` directive carries the patch ID prefix.",
@@ -1092,7 +1372,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         # If a file block contains exactly one modification, which is a `DELETE`
         # action with no other locators, we treat it as a command to delete the file.
         mods = change.get('modifications', [])
-        if len(mods) == 1 and mods[0].get('action') == 'DELETE' and not (set(mods[0]) - {'action', '_line'}):
+        if len(mods) == 1 and mods[0].get('action') == 'DELETE' and not (set(mods[0]) - {'action', '_line', '_eof_value'}):
             if not os.path.exists(file_path):
                 report_idempotency_skip(f"Path to delete does not exist: {file_path}")
                 continue
@@ -1180,6 +1460,11 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
         internal_newline = '\n'
         working_content = original_content.replace('\r\n', internal_newline).replace('\r', internal_newline)
+        # Snapshot + log of what each modification consumed. When a later locator
+        # cannot be found, this is what turns "Snippet not found" into "your own
+        # modification #k deleted it".
+        initial_content = working_content
+        consumed_log: List[Tuple[int, str]] = []
         # A locator repeated across several modifications of the same file is
         # the documented way to address N identical blocks in order. Any other
         # multi-match is real ambiguity and must not be resolved by guessing.
@@ -1195,6 +1480,11 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
             if k in seen_locators:
                 repeated_locators.add(k)
             seen_locators.add(k)
+
+        # Spans of `working_content` that this patch run wrote itself. Unlike the
+        # cursor it survives across retry passes, so a modification retried with
+        # a reset cursor still cannot latch onto the output of its predecessors.
+        dirty_regions: List[Tuple[int, int]] = []
 
         pending_mods = list(enumerate(change.get('modifications', [])))
         final_failed_mods = []
@@ -1222,22 +1512,42 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                             if create_failure_case:
                                 create_failure_case_file("afailed.log", report, original_content)
                             return report_error(report)
-                    elif action == 'REPLACE' and not content_to_add:
-                        error = {"code": "EMPTY_REPLACE", "message": "REPLACE with empty content is not allowed. Use DELETE instead.", "context": {}}
-                        report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
-                        if not strict:
-                            failed_in_this_pass.append((mod_idx, mod, report, error, original_content))
-                            continue
-                        else:
-                            if create_failure_case:
-                                create_failure_case_file("afailed.log", report, original_content)
-                            return report_error(report)
+                    elif action in ('REPLACE', 'RECREATE') and not content_to_add:
+                        # An empty `content` is only dangerous when it might be the
+                        # tail of a truncated answer. If a directive follows it in
+                        # the patch file, the emptiness is provably deliberate, and
+                        # `REPLACE` with nothing is simply a `DELETE`, which is what
+                        # models write anyway.
+                        truncated = mod.get('_eof_value') == 'content'
+                        if truncated or strict:
+                            code = "PATCH_TRUNCATED" if truncated else "EMPTY_REPLACE"
+                            msg = ("The patch ends with an empty 'content' block, so it cannot be "
+                                   "told apart from a truncated answer. Finish the patch, or close "
+                                   "it with an 'END' directive."
+                                   if truncated else
+                                   f"{action} with empty content is not allowed in strict mode. Use DELETE instead.")
+                            error = {"code": code, "message": msg, "context": {}}
+                            report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
+                            if not strict:
+                                failed_in_this_pass.append((mod_idx, mod, report, error, original_content))
+                                continue
+                            else:
+                                if create_failure_case:
+                                    create_failure_case_file("afailed.log", report, original_content)
+                                return report_error(report)
+                        if action == 'REPLACE':
+                            action = 'DELETE'
+                            content_to_add = None
+                            if not silent:
+                                print(f"  [TOLERANT] Mod #{mod_idx + 1}: empty 'content'; "
+                                      f"treating REPLACE as DELETE.")
 
                 if action == 'RECREATE':
                     if working_content == (content_to_add or ""):
                         report_idempotency_skip("RECREATE content already matches.")
                         continue
                     working_content = content_to_add or ""
+                    dirty_regions = [(0, len(working_content))] if working_content else []
                     last_mod_end_pos = len(working_content)
                     made_progress = True
                     if not silent:
@@ -1368,7 +1678,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                             start_range_begin, start_range_end = 0, 0
                             error = None
                         else:
-                            start_pos_info, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos, allow_repeat)
+                            start_pos_info, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos, allow_repeat, dirty_regions)
                             if not error: start_range_begin, start_range_end = start_pos_info
 
                         if not error:
@@ -1391,7 +1701,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                                         error = {"code": "snippet_tail_NOT_FOUND", "message": "End snippet not found.", "context": {"snippet": snippet_val, "snippet_tail": snippet_tail}}
 
                 elif snippet_val is not None:
-                     target_pos, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos, allow_repeat)
+                     target_pos, error = find_target_in_content(working_content, anchor_val, snippet_val, debug, last_mod_end_pos, allow_repeat, dirty_regions)
 
                 elif action != 'CREATE':
                     error = {"code": "INVALID_MODIFICATION", "message": "Modification requires locators.", "context": {}}
@@ -1401,10 +1711,42 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     if action == 'DELETE' and error.get('code') in ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND']:
                         report_idempotency_skip("Snippet to delete is already gone."); is_idempotency_skip = True
                     if action == 'REPLACE' and error.get('code') in ['SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND', 'snippet_tail_NOT_FOUND']:
-                        content_pos, _ = find_target_in_content(working_content, anchor_val, content_to_add or "", debug=False)
+                        content_pos, _ = find_target_in_content(
+                            working_content, anchor_val, content_to_add or "", debug=False,
+                            dirty=dirty_regions, dirty_strict=True)
                         if content_pos: report_idempotency_skip("Snippet not found, but replacement content exists."); is_idempotency_skip = True
 
                     if is_idempotency_skip: continue
+
+                    # === WAS THE LOCATOR CONSUMED BY THIS VERY PATCH? ===
+                    # Overlapping modifications are a routine generation error:
+                    # #1 replaces a block, #2 targets a line that lived inside it.
+                    # "Snippet not found" sends the model looking for a phantom
+                    # change in the file; naming the culprit modification lets it
+                    # merge the two instead of guessing.
+                    if error.get('code') in ('SNIPPET_NOT_FOUND', 'ANCHOR_NOT_FOUND', 'snippet_tail_NOT_FOUND'):
+                        probe = {'ANCHOR_NOT_FOUND': anchor_val,
+                                 'snippet_tail_NOT_FOUND': snippet_tail}.get(error['code'], snippet_val)
+                        culprit = None
+                        if probe:
+                            for c_idx, removed in consumed_log:
+                                if c_idx != mod_idx and removed and smart_find(removed, probe):
+                                    culprit = c_idx
+                                    break
+                            if (culprit is None and smart_find(initial_content, probe)
+                                    and not smart_find(working_content, probe)):
+                                culprit = -1
+                        if culprit is not None:
+                            where = (f"modification #{culprit + 1}" if culprit >= 0
+                                     else "an earlier modification")
+                            error = {
+                                "code": "LOCATOR_CONSUMED",
+                                "message": (f"The locator existed in the original file but {where} of the "
+                                            f"same file removed it. Modifications are applied in order, "
+                                            f"each seeing the result of the previous ones."),
+                                "context": {"snippet": snippet_val, "anchor": anchor_val,
+                                            "removed_by_mod": culprit + 1 if culprit >= 0 else None},
+                            }
 
                     report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
                     if 'context' not in report['error']: report['error']['context'] = {}
@@ -1421,6 +1763,22 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 if action == 'CREATE': continue
                 start_pos, end_pos = target_pos
 
+                # === SCOPE EXPANSION ===
+                # `scope_end` lets a locator name a construct by its header line
+                # alone: the region is extended to the end of the block that
+                # header opens. This removes the need for a snippet/snippet_tail
+                # pair when replacing or deleting a whole function, and makes
+                # "insert after function A" expressible without guessing where A
+                # ends.
+                if mod.get('scope_end'):
+                    expanded = resolve_scope_end(working_content, start_pos, end_pos)
+                    if expanded is None:
+                        if not silent:
+                            print(f"  [TOLERANT] Mod #{mod_idx + 1}: 'scope_end' requested but the "
+                                  f"snippet does not open a block; ignoring it.")
+                    else:
+                        end_pos = max(end_pos, expanded)
+
                 for key, val in [('include_leading_blank_lines', -1), ('include_trailing_blank_lines', 1)]:
                     count = mod.get(key, 0)
                     if count > 0:
@@ -1436,21 +1794,74 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                         if val == -1: start_pos = pos
                         else: end_pos = pos
 
+                # === NESTING GUARD ===
+                # A model asked to add a function "after function A" reaches for
+                # A's signature line as the locator, which places the new
+                # function between the signature and its body. The result is
+                # syntactically broken but applies cleanly, so nothing catches it
+                # until the compiler does.
+                if action in ('INSERT_AFTER', 'INSERT_BEFORE') and content_to_add:
+                    probe = end_pos if action == 'INSERT_AFTER' else start_pos
+                    corrected = top_level_insert_correction(
+                        working_content, probe, content_to_add, action == 'INSERT_AFTER')
+                    if corrected is not None and corrected != probe:
+                        if strict:
+                            error = {"code": "NESTING_MISMATCH",
+                                     "message": (f"'{action}' would place a self-contained top-level block "
+                                                 f"inside another block. Use a locator on the surrounding "
+                                                 f"declaration with 'scope_end 1', or target the neighbouring "
+                                                 f"top-level declaration instead."),
+                                     "context": {"snippet": snippet_val}}
+                            report = {"status": "FAILED", "file_path": relative_path, "mod_idx": mod_idx, "error": error}
+                            if create_failure_case:
+                                create_failure_case_file("afailed.log", report, original_content)
+                            return report_error(report)
+                        if not silent:
+                            print(f"  [TOLERANT] Mod #{mod_idx + 1}: insertion point is inside a block while "
+                                  f"'content' is a self-contained top-level block; "
+                                  f"moving it to the {'end' if action == 'INSERT_AFTER' else 'start'} "
+                                  f"of the enclosing block.")
+                        # Keep the blank line that separates top-level
+                        # declarations: `content` is trimmed of blank lines, so it
+                        # has to be re-added here.
+                        needs_pad = (corrected >= 2 and working_content[corrected - 1] == '\n'
+                                     and working_content[corrected - 2] != '\n')
+                        if action == 'INSERT_AFTER':
+                            end_pos = corrected
+                            start_pos = min(start_pos, end_pos)
+                            if needs_pad:
+                                content_to_add = '\n' + content_to_add
+                        else:
+                            start_pos = corrected
+                            end_pos = max(end_pos, start_pos)
+                            if corrected > 0 and not working_content[:corrected].endswith('\n\n'):
+                                content_to_add = content_to_add + '\n'
+
                 if action == 'REPLACE' and normalize_block(working_content[start_pos:end_pos]) == normalize_block(content_to_add):
                     report_idempotency_skip("REPLACE content already present.")
                     last_mod_end_pos = end_pos
                     continue
                 elif action == 'INSERT_AFTER' and normalize_block(working_content[end_pos:]).startswith(normalize_block(content_to_add)):
                     report_idempotency_skip("INSERT_AFTER content already present.")
-                    last_mod_end_pos = end_pos + len(content_to_add or "")
+                    # Advance the cursor past the copy that is ALREADY IN THE FILE.
+                    # Using len(content_to_add) instead measures the patch's own
+                    # formatting: when the file's copy is indented differently the
+                    # cursor lands mid-construct and the next modification loses
+                    # its target for no visible reason.
+                    already_there = smart_find(working_content[end_pos:], content_to_add or "")
+                    last_mod_end_pos = (end_pos + already_there[0][1]) if already_there else end_pos
                     continue
                 elif action == 'INSERT_BEFORE' and normalize_block(working_content[:start_pos]).endswith(normalize_block(content_to_add)):
                     report_idempotency_skip("INSERT_BEFORE content already present.")
                     last_mod_end_pos = start_pos
                     continue
 
+                if action in ('REPLACE', 'DELETE') and end_pos > start_pos:
+                    consumed_log.append((mod_idx, working_content[start_pos:end_pos]))
+
                 if action == 'DELETE':
                     working_content = working_content[:start_pos] + working_content[end_pos:]
+                    dirty_regions = shift_dirty(dirty_regions, start_pos, end_pos, 0)
 
                 indented_content = content_to_add or ""
                 if action in ['REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE'] and content_to_add:
@@ -1466,10 +1877,13 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
                 if action == 'REPLACE':
                     working_content = working_content[:start_pos] + indented_content + working_content[end_pos:]
+                    dirty_regions = shift_dirty(dirty_regions, start_pos, end_pos, len(indented_content))
                 elif action == 'INSERT_AFTER':
                     working_content = working_content[:end_pos] + indented_content + working_content[end_pos:]
+                    dirty_regions = shift_dirty(dirty_regions, end_pos, end_pos, len(indented_content))
                 elif action == 'INSERT_BEFORE':
                     working_content = working_content[:start_pos] + indented_content + working_content[start_pos:]
+                    dirty_regions = shift_dirty(dirty_regions, start_pos, start_pos, len(indented_content))
 
                 # Update cursor position for the next iteration based on the change that just happened.
                 if action == 'REPLACE':
@@ -1516,9 +1930,31 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
 
             failed_file_block['modifications'].append(mod)
 
+        # === STRUCTURAL SANITY CHECK ===
+        # The patcher cannot parse the target language, but it can count
+        # brackets. A file whose brackets balanced before the patch and do not
+        # balance after it is almost always the result of a locator that cut a
+        # construct in half - the patch applied cleanly and the code does not
+        # compile. Reported as a warning, not a failure: the count is heuristic
+        # and plenty of legitimate text files are unbalanced by nature.
+        if file_existed and working_content != initial_content and not silent:
+            before = net_bracket_depth(initial_content)
+            after = net_bracket_depth(working_content)
+            if before == 0 and after != 0:
+                print(f"  ! WARNING: brackets in {relative_path} were balanced before the patch "
+                      f"and are off by {after:+d} after it. The result is very likely not valid "
+                      f"source code - review it before committing.")
+
         if not terminal_op_planned:
             final_content = newline_char.join([line for line in working_content.split(internal_newline)])
             if final_content != original_content or not file_existed:
+                # A file that ends without a newline produces a noisy diff for
+                # whoever edits its last line next, so every file this patcher
+                # rewrites gets one. Only files it actually changed: silently
+                # appending a newline to an otherwise untouched file would be
+                # exactly the spurious diff this avoids elsewhere.
+                if final_content and not final_content.endswith(newline_char):
+                    final_content += newline_char
                 write_plan.append(('WRITE', file_path, final_content, relative_path, original_content))
 
     if not strict and failed_changes_output:
@@ -1534,7 +1970,7 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     f.write(f"{patch_id_str} {mod_item['action']}\n")
                     for key in ['anchor', 'snippet', 'snippet_tail', 'content']:
                         if key in mod_item: f.write(f"{patch_id_str} {key}\n{mod_item[key]}\n")
-                    for key in ['include_leading_blank_lines', 'include_trailing_blank_lines']:
+                    for key in ['include_leading_blank_lines', 'include_trailing_blank_lines', 'scope_end']:
                         if key in mod_item: f.write(f"{patch_id_str} {key} {mod_item[key]}\n")
                     f.write("\n")
         write_llm_report(afailed_md_path, patch_content, llm_file_reports)

@@ -215,7 +215,7 @@ CASES = [
                   "Example:\n\n```\ne4a2f1b8 FILE\nx.py\n\ne4a2f1b8 REPLACE\ne4a2f1b8 snippet\n"
                   "old\ne4a2f1b8 content\nnew\n```\n\nEnd."),
         "expect_files": {"doc.md": "Example:\n\n```\ne4a2f1b8 FILE\nx.py\n\ne4a2f1b8 REPLACE\n"
-                                   "e4a2f1b8 snippet\nold\ne4a2f1b8 content\nnew\n```\n\nEnd."},
+                                   "e4a2f1b8 snippet\nold\ne4a2f1b8 content\nnew\n```\n\nEnd.\n"},
     },
         {
             "name": "c27_cli_entry_point_is_importable_and_consistent",
@@ -235,7 +235,7 @@ CASES = [
                 "New file created successfully!\n"
             ),
         "expect_files": {
-            "src/new_file.txt": "New file created successfully!"
+            "src/new_file.txt": "New file created successfully!\n"
         },
         },
         {
@@ -255,4 +255,149 @@ CASES = [
                 "src/a.txt": "new content\n"
             },
         },
-    ]
+{
+        "name": "c30_locator_never_matches_text_the_patch_itself_wrote",
+        "files": {"m.py": "def a():\n    log(\"start\")\n    return 1\n\ndef b():\n    return 2\n"},
+        "patch": ("aa000030 AP 3.2\n\naa000030 FILE\nm.py\n\n"
+                  "aa000030 INSERT_AFTER\naa000030 snippet\ndef b():\n"
+                  "aa000030 content\n    log(\"start\")\n\n"
+                  "aa000030 REPLACE\naa000030 snippet\nlog(\"start\")\n"
+                  "aa000030 content\n    log(\"BEGIN\")\n"),
+        "expect_files": {"m.py": "def a():\n    log(\"BEGIN\")\n    return 1\n\ndef b():\n    log(\"start\")\n    return 2\n"},
+    },
+    {
+        "name": "c31_idempotency_probe_does_not_match_its_own_output",
+        "files": {"m.py": "def a(x):\n    old_a()\n\ndef b(x):\n    old_b()\n"},
+        "patch": ("aa000031 AP 3.2\n\naa000031 FILE\nm.py\n\n"
+                  "aa000031 REPLACE\naa000031 snippet\nold_a()\naa000031 content\ncheck(x)\n\n"
+                  "aa000031 REPLACE\naa000031 snippet\nold_bb()\naa000031 content\ncheck(x)\n"),
+        "expect_status": "PARTIAL",
+        "expect_md": ["Snippet not found"],
+        "expect_files": {"m.py": "def a(x):\n    check(x)\n\ndef b(x):\n    old_b()\n"},
+    },
+    {
+        "name": "c32_single_line_locator_does_not_eat_a_line_prefix",
+        "files": {"m.py": "class C:\n    def __init__(self):\n        self.count = 0\n"},
+        "patch": ("aa000032 AP 3.2\n\naa000032 FILE\nm.py\n\n"
+                  "aa000032 REPLACE\naa000032 snippet\ncount = 0\naa000032 content\ncount = 5\n"),
+        "expect_status": "PARTIAL",
+        "expect_unchanged": ["m.py"],
+    },
+    {
+        "name": "c33_single_line_locator_still_ignores_list_numbering",
+        "files": {"m.py": "# 1. First item\n# 2. Second item\n"},
+        "patch": ("aa000033 AP 3.2\n\naa000033 FILE\nm.py\n\n"
+                  "aa000033 REPLACE\naa000033 snippet\nFirst item\naa000033 content\n# First item (replaced)\n"),
+        "expect_files": {"m.py": "# First item (replaced)\n# 2. Second item\n"},
+    },
+    {
+        "name": "c34_empty_content_followed_by_a_directive_is_a_delete",
+        "files": {"a.txt": "a\nb\nc\n"},
+        "patch": ("aa000034 AP 3.2\n\naa000034 FILE\na.txt\n\n"
+                  "aa000034 REPLACE\naa000034 snippet\nb\naa000034 content\n\n"
+                  "aa000034 REPLACE\naa000034 snippet\nc\naa000034 content\nC\n"),
+        "expect_files": {"a.txt": "a\nC\n"},
+    },
+    {
+        "name": "c35_empty_content_at_end_of_patch_is_treated_as_truncation",
+        "files": {"a.txt": "a\nb\nc\n"},
+        "patch": ("aa000035 AP 3.2\n\naa000035 FILE\na.txt\n\n"
+                  "aa000035 REPLACE\naa000035 snippet\nb\naa000035 content\n"),
+        "expect_status": "PARTIAL",
+        "expect_unchanged": ["a.txt"],
+        "expect_md": ["PATCH_TRUNCATED"],
+    },
+    {
+        "name": "c36_end_directive_proves_a_trailing_empty_content_is_deliberate",
+        "files": {"a.txt": "a\nb\nc\n"},
+        "patch": ("aa000036 AP 3.2\n\naa000036 FILE\na.txt\n\n"
+                  "aa000036 REPLACE\naa000036 snippet\nb\naa000036 content\n\naa000036 END\n"),
+        "expect_files": {"a.txt": "a\nc\n"},
+    },
+    {
+        "name": "c37_top_level_block_is_not_inserted_inside_a_function",
+        "files": {"main.go": "package main\n\nfunc A(x int) int {\n\treturn 0\n}\n\nfunc C() {}\n"},
+        "patch": ("aa000037 AP 3.2\n\naa000037 FILE\nmain.go\n\n"
+                  "aa000037 INSERT_AFTER\naa000037 snippet\nfunc A(x int) int {\n"
+                  "aa000037 content\nfunc B(x int) int {\n\treturn x + 1\n}\n"),
+        "expect_files": {"main.go": "package main\n\nfunc A(x int) int {\n\treturn 0\n}\n\nfunc B(x int) int {\n\treturn x + 1\n}\n\nfunc C() {}\n"},
+    },
+    {
+        "name": "c38_nested_block_is_left_where_the_model_put_it",
+        "files": {"main.go": "package main\n\nfunc A() {\n\tx := 1\n\t_ = x\n}\n"},
+        "patch": ("aa000038 AP 3.2\n\naa000038 FILE\nmain.go\n\n"
+                  "aa000038 INSERT_AFTER\naa000038 snippet\nx := 1\n"
+                  "aa000038 content\n\tgo func() {\n\t\twork()\n\t}()\n"),
+        "expect_files": {"main.go": "package main\n\nfunc A() {\n\tx := 1\n\tgo func() {\n\t\twork()\n\t}()\n\t_ = x\n}\n"},
+    },
+    {
+        "name": "c39_scope_end_replaces_a_whole_brace_block",
+        "files": {"main.go": "package main\n\nfunc A(x int) int {\n\tif x > 0 {\n\t\treturn x\n\t}\n\treturn 0\n}\n\nfunc C() {}\n"},
+        "patch": ("aa000039 AP 3.2\n\naa000039 FILE\nmain.go\n\n"
+                  "aa000039 REPLACE\naa000039 snippet\nfunc A(x int) int {\n"
+                  "aa000039 scope_end 1\n"
+                  "aa000039 content\nfunc A(x int) int {\n\treturn x\n}\n"),
+        "expect_files": {"main.go": "package main\n\nfunc A(x int) int {\n\treturn x\n}\n\nfunc C() {}\n"},
+    },
+    {
+        "name": "c40_scope_end_deletes_a_whole_indented_block",
+        "files": {"m.py": "def a(x):\n    if x:\n        return 1\n    return 0\n\ndef b(x):\n    return 2\n"},
+        "patch": ("aa000040 AP 3.2\n\naa000040 FILE\nm.py\n\n"
+                  "aa000040 DELETE\naa000040 snippet\ndef a(x):\n"
+                  "aa000040 scope_end 1\naa000040 include_trailing_blank_lines 1\n"),
+        "expect_files": {"m.py": "def b(x):\n    return 2\n"},
+    },
+{
+        "name": "c41_locator_removed_by_an_earlier_modification_is_named_as_such",
+        "files": {"m.py": "def a(x):\n    log(\"hi\")\n    return x\n\ndef b(x):\n    return 2\n"},
+        "patch": ("aa000041 AP 3.2\n\naa000041 FILE\nm.py\n\n"
+                  "aa000041 REPLACE\naa000041 snippet\ndef a(x):\naa000041 scope_end 1\n"
+                  "aa000041 content\ndef a(x):\n    return x * 2\n\n"
+                  "aa000041 REPLACE\naa000041 snippet\nlog(\"hi\")\n"
+                  "aa000041 content\n    log(\"bye\")\n"),
+        "expect_status": "PARTIAL",
+        "expect_md": ["LOCATOR_CONSUMED"],
+        "expect_files": {"m.py": "def a(x):\n    return x * 2\ndef b(x):\n    return 2\n"},
+    },
+    {
+        "name": "c42_anchor_duplicated_by_the_patch_itself_stays_unambiguous",
+        "files": {"m.py": "def a():\n    setup()\n    work()\n\ndef b():\n    work()\n"},
+        "patch": ("aa000042 AP 3.2\n\naa000042 FILE\nm.py\n\n"
+                  "aa000042 INSERT_BEFORE\naa000042 snippet\ndef b():\n"
+                  "aa000042 content\ndef c():\n    setup()\n\n"
+                  "aa000042 REPLACE\naa000042 anchor\ndef b():\n"
+                  "aa000042 snippet\nwork()\naa000042 content\n    work2()\n"),
+        "expect_files": {"m.py": "def a():\n    setup()\n    work()\n\ndef c():\n    setup()\ndef b():\n    work2()\n"},
+    },
+    {
+        "name": "c43_unbalanced_result_is_reported",
+        "files": {"main.go": "package main\n\nfunc A() {\n\tif true {\n\t\twork()\n\t}\n}\n"},
+        "patch": ("aa000043 AP 3.2\n\naa000043 FILE\nmain.go\n\n"
+                  "aa000043 REPLACE\naa000043 snippet\nif true {\n"
+                  "aa000043 snippet_tail\nwork()\n"
+                  "aa000043 content\n\twork2()\n"),
+        "expect_stdout": ["off by -1"],
+    },
+{
+        "name": "c44_rewritten_file_gains_a_trailing_newline",
+        "files": {"f.txt": "a\nb"},
+        "patch": ("aa000044 AP 3.2\n\naa000044 FILE\nf.txt\n\n"
+                  "aa000044 REPLACE\naa000044 snippet\nb\naa000044 content\nB\n"),
+        "expect_files": {"f.txt": "a\nB\n"},
+    },
+    {
+        "name": "c45_untouched_file_is_not_given_a_trailing_newline",
+        "files": {"f.txt": "a\nb", "g.txt": "x\n"},
+        "patch": ("aa000045 AP 3.2\n\naa000045 FILE\ng.txt\n\n"
+                  "aa000045 REPLACE\naa000045 snippet\nx\naa000045 content\nX\n"),
+        "expect_files": {"g.txt": "X\n"},
+        "expect_unchanged": ["f.txt"],
+    },
+    {
+        "name": "c46_trailing_newline_uses_the_files_own_line_ending",
+        "files": {"f.txt": "a\r\nb"},
+        "patch": ("aa000046 AP 3.2\n\naa000046 FILE\nf.txt\n\n"
+                  "aa000046 REPLACE\naa000046 snippet\nb\naa000046 content\nB\n"),
+        "expect_files": {"f.txt": "a\r\nB\r\n"},
+    },
+]

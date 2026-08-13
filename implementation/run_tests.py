@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, sys, shutil, tempfile, difflib, json, argparse, hashlib, io
+import os, sys, shutil, tempfile, difflib, json, argparse, hashlib, io, contextlib
 from os.path import isdir, isfile, join
 from ap import apply_patch
 from cases import CASES
@@ -201,7 +201,7 @@ def get_paths(test_name):
 
     return src_paths, patch_file, primary_expected_path
 
-def run_positive_test(test_name, debug=False):
+def run_positive_test(test_name, debug=False, update_expected=False):
     src_files, patch_file, expected_file = get_paths(test_name)
     src_file = src_files[0] if src_files else None
     test_dir = tempfile.mkdtemp()
@@ -287,6 +287,12 @@ def run_positive_test(test_name, debug=False):
 
         if actual_raw == expected_raw:
             print(f"✅ PASSED: {test_name}"); return True
+        elif update_expected:
+            # Deliberate, suite-wide output policy changes (line endings, trailing
+            # newlines) would otherwise mean hand-editing dozens of fixtures.
+            with open(expected_file_path, 'wb') as f:
+                f.write(actual_raw)
+            print(f"✎ UPDATED: {test_name} ({expected_file_path})"); return True
         else:
             print(f"❌ FAILED: {test_name}. Output does not match expected result.")
             actual, expected = actual_raw.decode('utf-8', 'replace'), expected_raw.decode('utf-8', 'replace')
@@ -356,8 +362,15 @@ def run_case(case, debug=False):
         with open(patch_path, "w", encoding="utf-8") as f:
             f.write(case["patch"])
 
-        report = apply_patch(patch_file=patch_path, project_dir=test_dir,
-                             strict=case.get("strict", False), debug=debug, silent=not debug)
+        # Some cases assert on what the patcher PRINTS (tolerant notes, structural
+        # warnings), which is only produced when it is not silenced.
+        want_stdout = bool(case.get("expect_stdout"))
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer) if want_stdout else contextlib.nullcontext():
+            report = apply_patch(patch_file=patch_path, project_dir=test_dir,
+                                 strict=case.get("strict", False), debug=debug,
+                                 silent=not (debug or want_stdout))
+        printed = buffer.getvalue()
 
         def fail(reason):
             print(f"❌ FAILED: {name}. {reason}")
@@ -394,6 +407,10 @@ def run_case(case, debug=False):
             if os.path.exists(join(test_dir, rel)):
                 return fail(f"File '{rel}' should not exist.")
 
+        for needle in case.get("expect_stdout", []):
+            if needle not in printed:
+                return fail(f"Expected {needle!r} in the patcher output.")
+
         if case.get("expect_md"):
             md_path = join(test_dir, "afailed.md")
             if not isfile(md_path):
@@ -411,6 +428,10 @@ def run_case(case, debug=False):
 def main():
     parser = argparse.ArgumentParser(description="Run the full test suite for the 'ap' patcher.")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging for each test.")
+    parser.add_argument("--update-expected", action="store_true",
+                        help="Overwrite fixtures in expected/ with the current output. "
+                             "Review the resulting git diff before committing - this "
+                             "turns every regression into a passing test.")
     args = parser.parse_args()
     generate_test_patches()
 
@@ -419,7 +440,8 @@ def main():
     for name, type, code in TESTS:
         try:
             if type == "positive":
-                results.append(run_positive_test(name, debug=args.debug))
+                results.append(run_positive_test(name, debug=args.debug,
+                                                update_expected=args.update_expected))
             elif type == "negative":
                 results.append(run_negative_test(name, code, debug=args.debug))
         except Exception as e:
@@ -430,6 +452,9 @@ def main():
             results.append(run_case(case, debug=args.debug))
         except Exception as e:
             print(f"❌ CRITICAL FAILURE in case '{case['name']}': {e}"); results.append(False)
+
+    if args.update_expected:
+        print("\n! Fixtures in expected/ were overwritten. Inspect `git diff` before committing.")
 
     passed, total = sum(results), len(results)
     print(f"\n===========================\n  Summary: {passed} / {total} tests passed.\n===========================")
