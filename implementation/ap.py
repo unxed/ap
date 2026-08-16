@@ -1305,28 +1305,45 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
         # Path search heuristic (auto-detect if we are inside a subtree)
         if not os.path.exists(os.path.join(project_dir, relative_path)):
             parts = relative_path.replace('\\', '/').split('/')
-            found = False
-            for i in range(1, len(parts)):
-                test_path = '/'.join(parts[i:])
-                if os.path.exists(os.path.join(project_dir, test_path)):
-                    relative_path = test_path
-                    stripped_prefix = '/'.join(parts[:i])
-                    found = True
-                    break
-
-            # If the file does not exist, check if a subdirectory inside the remaining path exists,
-            # while the leading prefix does not. E.g. 'my_project/src/new_file.py' when 'src' exists as a directory
-            # but 'my_project' does not, and we are running inside 'my_project' (or 'my_project-master' etc).
-            if not found:
+            top_part = parts[0]
+            # Only attempt prefix stripping if the leading directory does NOT exist in project_dir.
+            # If the leading directory exists (e.g. "bindings" in "bindings/python/README.md"),
+            # the path is already correctly anchored and must not be stripped!
+            if len(parts) > 1 and not os.path.exists(os.path.join(project_dir, top_part)):
+                found = False
                 for i in range(1, len(parts)):
-                    prefix_parts = parts[:i]
-                    prefix_path = os.path.join(project_dir, *prefix_parts)
-                    target_dir_path = os.path.join(project_dir, parts[i])
-                    if not os.path.exists(prefix_path) and os.path.isdir(target_dir_path):
-                        relative_path = '/'.join(parts[i:])
+                    test_path = '/'.join(parts[i:])
+                    if os.path.exists(os.path.join(project_dir, test_path)):
+                        relative_path = test_path
                         stripped_prefix = '/'.join(parts[:i])
                         found = True
                         break
+
+                # If the file does not exist, check if a subdirectory inside the remaining path exists,
+                # while the leading prefix does not.
+                if not found:
+                    for i in range(1, len(parts)):
+                        prefix_parts = parts[:i]
+                        prefix_path = os.path.join(project_dir, *prefix_parts)
+                        target_dir_path = os.path.join(project_dir, parts[i])
+                        if not os.path.exists(prefix_path) and os.path.isdir(target_dir_path):
+                            relative_path = '/'.join(parts[i:])
+                            stripped_prefix = '/'.join(parts[:i])
+                            found = True
+                            break
+
+                if not found:
+                    project_dir_abs = os.path.abspath(project_dir).replace('\\', '/')
+                    project_dir_name = os.path.basename(project_dir_abs)
+                    for i in range(len(parts) - 1, 0, -1):
+                        prefix = '/'.join(parts[:i])
+                        if (project_dir_abs.endswith('/' + prefix) or
+                            project_dir_abs == prefix or
+                            (len(prefix) >= 2 and (project_dir_name.startswith(prefix) or prefix.startswith(project_dir_name)))):
+                            relative_path = '/'.join(parts[i:])
+                            stripped_prefix = prefix
+                            found = True
+                            break
 
             if not found:
                 project_dir_abs = os.path.abspath(project_dir).replace('\\', '/')
