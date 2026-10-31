@@ -44,6 +44,38 @@ def normalize_block(text: Optional[str]) -> str:
 def leading_whitespace(line: str) -> str:
     return line[:len(line) - len(line.lstrip(' \t'))]
 
+def indented_block(text: Optional[str]) -> str:
+    """Like normalize_block, but keeps each line's leading whitespace."""
+    return "\n".join(l.rstrip() for l in (text or "").splitlines() if l.strip())
+
+def whitespace_only_replacement(region: str, old: Optional[str], new: str, reindent) -> Optional[str]:
+    """
+    Decides a REPLACE whose `content` equals the matched region up to whitespace.
+
+    `normalize_block` ignores indentation, so on its own it cannot tell an
+    already-applied REPLACE from one whose whole point IS the indentation (a
+    dedent or indent of a block). Returns None when the region already reads as
+    the patch wants it (skip as already applied), otherwise the exact text to
+    write in place of the region.
+
+    `old` is the patch's own `snippet` when it covers the whole region, else None.
+    """
+    if old is not None and indented_block(old) == indented_block(new):
+        # The patch itself changes nothing (old == new, even indentation-wise):
+        # a no-op restatement, whatever indentation the file uses.
+        return None
+    old_lines = [l for l in (old or "").splitlines() if l.strip()]
+    if old_lines and leading_whitespace(old_lines[0]):
+        # The model wrote the old text WITH its indentation, so a `content`
+        # indented differently is the intended change, not dropped whitespace:
+        # restoring the region's indentation would undo the very edit requested.
+        target = new
+    else:
+        target = reindent(new)
+    if indented_block(region) == indented_block(target):
+        return None
+    return target
+
 def visualize_str(s: str) -> str:
     """Makes special characters visible for debugging."""
     if not isinstance(s, str): return repr(s)
@@ -1345,19 +1377,6 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                             found = True
                             break
 
-            if not found:
-                project_dir_abs = os.path.abspath(project_dir).replace('\\', '/')
-                project_dir_name = os.path.basename(project_dir_abs)
-                for i in range(len(parts) - 1, 0, -1):
-                    prefix = '/'.join(parts[:i])
-                    if (project_dir_abs.endswith('/' + prefix) or
-                        project_dir_abs == prefix or
-                        (len(prefix) >= 2 and (project_dir_name.startswith(prefix) or prefix.startswith(project_dir_name)))):
-                        relative_path = '/'.join(parts[i:])
-                        stripped_prefix = prefix
-                        found = True
-                        break
-
         # SECURITY: Perform path validation before any filesystem operations.
         real_project_dir = os.path.realpath(project_dir)
         try:
@@ -1854,10 +1873,24 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                             if corrected > 0 and not working_content[:corrected].endswith('\n\n'):
                                 content_to_add = content_to_add + '\n'
 
+                replace_text = None
                 if action == 'REPLACE' and normalize_block(working_content[start_pos:end_pos]) == normalize_block(content_to_add):
-                    report_idempotency_skip("REPLACE content already present.")
-                    last_mod_end_pos = end_pos
-                    continue
+                    # Equal up to whitespace: either already applied, or a
+                    # REPLACE that only changes indentation (dedent/indent).
+                    region = working_content[start_pos:end_pos]
+                    old_text = (snippet_val if snippet_tail is None and
+                                normalize_block(snippet_val) == normalize_block(region) else None)
+                    replace_text = whitespace_only_replacement(
+                        region, old_text, content_to_add or "",
+                        lambda new: reindent_content(working_content, start_pos, end_pos, new,
+                                                     action, strict, lambda _m: None))
+                    if replace_text is None:
+                        report_idempotency_skip("REPLACE content already present.")
+                        last_mod_end_pos = end_pos
+                        continue
+                    if not silent:
+                        print(f"  ~ Mod #{mod_idx + 1}: 'content' differs from the target only "
+                              f"by indentation; applying it as an indentation change.")
                 elif action == 'INSERT_AFTER' and normalize_block(working_content[end_pos:]).startswith(normalize_block(content_to_add)):
                     report_idempotency_skip("INSERT_AFTER content already present.")
                     # Advance the cursor past the copy that is ALREADY IN THE FILE.
@@ -1884,8 +1917,11 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                 if action in ['REPLACE', 'INSERT_AFTER', 'INSERT_BEFORE'] and content_to_add:
                     def indent_warn(message, _idx=mod_idx):
                         if not silent: print(f"  [TOLERANT] Mod #{_idx + 1}: {message}")
-                    indented_content = reindent_content(
-                        working_content, start_pos, end_pos, content_to_add, action, strict, indent_warn)
+                    if replace_text is not None:
+                        indented_content = replace_text
+                    else:
+                        indented_content = reindent_content(
+                            working_content, start_pos, end_pos, content_to_add, action, strict, indent_warn)
                     debug_print(debug, "INDENTATION LOGIC", reindented=indented_content != content_to_add)
                     original_had_trailing_newline = end_pos > start_pos and working_content[end_pos-1] == internal_newline
                     if action in ['INSERT_AFTER', 'INSERT_BEFORE'] or (action == 'REPLACE' and original_had_trailing_newline):
