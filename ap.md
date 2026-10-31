@@ -151,6 +151,7 @@ A Patcher MUST apply modifications idempotently. Applying the same patch multipl
 - **`RENAME`**: If the source file/directory does not exist but the destination file/directory does, the operation is considered already complete and MUST be skipped. If the source is missing and the destination is also missing, the Patcher MUST report an error.
 - **`DELETE`**: If the `snippet` is not found, the operation is considered already complete and MUST be skipped.
 - **`REPLACE`**: If the content at the target location is already identical to the modification's `content`, the operation MUST be skipped. If the `snippet` is not found but the `content` is already present in the search scope, this is also considered a successfully completed operation.
+  Because locators match whitespace-insensitively, "identical" here MUST take indentation into account when the modification itself changes only indentation (its `snippet` and `content` differ only by leading whitespace, e.g. a dedent of a block): such a `REPLACE` MUST be applied unless the target already has the `content`'s indentation, and indentation restoration for dropped whitespace MUST NOT undo it. A `REPLACE` whose `snippet` and `content` are identical, indentation included, is a no-op and MUST be skipped.
 - **`INSERT_AFTER`**: If the code immediately following the `snippet` already matches the `content`, the operation MUST be skipped.
 - **`INSERT_BEFORE`**: If the code immediately preceding the `snippet` already matches the `content`, the operation MUST be skipped.
 - **`CREATE`**:
