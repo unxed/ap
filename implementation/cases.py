@@ -485,4 +485,30 @@ CASES = [
         "expect_unchanged": ["m.py"],
         "expect_stdout": ["already applied"],
     },
+    {
+        # INSERT_AFTER anchored on the last line of a file with no trailing newline
+        # must not glue the new block onto that line (live defect, markdown table row).
+        "name": "c56_insert_after_last_line_without_trailing_newline",
+        "files": {"t.md": "| a | b |\n|---|---|\n| 1 | 2 |"},
+        "patch": ("aa000056 AP 3.2\n\naa000056 FILE\nt.md\n\n"
+                  "aa000056 INSERT_AFTER\naa000056 anchor\n| 1 | 2 |\n"
+                  "aa000056 content\n| 3 | 4 |\n"),
+        "expect_files": {"t.md": "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n"},
+    },
+    {
+        "name": "c57_insert_before_last_line_without_trailing_newline",
+        "files": {"t.md": "x\nlast"},
+        "patch": ("aa000057 AP 3.2\n\naa000057 FILE\nt.md\n\n"
+                  "aa000057 INSERT_BEFORE\naa000057 anchor\nlast\n"
+                  "aa000057 content\nnew\n"),
+        "expect_files": {"t.md": "x\nnew\nlast\n"},
+    },
+    {
+        "name": "c58_replace_last_line_without_trailing_newline",
+        "files": {"t.md": "x\nlast"},
+        "patch": ("aa000058 AP 3.2\n\naa000058 FILE\nt.md\n\n"
+                  "aa000058 REPLACE\naa000058 snippet\nlast\n"
+                  "aa000058 content\nLAST\n"),
+        "expect_files": {"t.md": "x\nLAST\n"},
+    },
 ]

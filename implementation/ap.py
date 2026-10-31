@@ -1927,6 +1927,11 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                     if action in ['INSERT_AFTER', 'INSERT_BEFORE'] or (action == 'REPLACE' and original_had_trailing_newline):
                         if not indented_content.endswith('\n'):
                             indented_content += internal_newline
+                    if action == 'INSERT_AFTER' and end_pos > 0 and working_content[end_pos-1] != internal_newline:
+                        # Anchor is the last line of a file without a trailing newline:
+                        # start the inserted block on its own line instead of gluing it
+                        # onto that line. The file then ends with a newline.
+                        indented_content = internal_newline + indented_content
 
                 if action == 'REPLACE':
                     working_content = working_content[:start_pos] + indented_content + working_content[end_pos:]
