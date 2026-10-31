@@ -1345,19 +1345,6 @@ def apply_patch(patch_file: str, project_dir: str, dry_run: bool = False, json_r
                             found = True
                             break
 
-            if not found:
-                project_dir_abs = os.path.abspath(project_dir).replace('\\', '/')
-                project_dir_name = os.path.basename(project_dir_abs)
-                for i in range(len(parts) - 1, 0, -1):
-                    prefix = '/'.join(parts[:i])
-                    if (project_dir_abs.endswith('/' + prefix) or
-                        project_dir_abs == prefix or
-                        (len(prefix) >= 2 and (project_dir_name.startswith(prefix) or prefix.startswith(project_dir_name)))):
-                        relative_path = '/'.join(parts[i:])
-                        stripped_prefix = prefix
-                        found = True
-                        break
-
         # SECURITY: Perform path validation before any filesystem operations.
         real_project_dir = os.path.realpath(project_dir)
         try:
